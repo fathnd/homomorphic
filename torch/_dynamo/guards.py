@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import builtins
 import collections
+import copy
 import dataclasses
 import enum
 import functools
@@ -48,6 +49,9 @@ from torch.fx.experimental.symbolic_shapes import (
     is_symbolic,
     SYMPY_INTERP,
 )
+from torch.nested._internal.nested_tensor import NestedTensor
+
+from torch.utils._python_dispatch import is_traceable_wrapper_subclass
 
 from torch.utils._traceback import format_frame, report_compile_source_on_error
 from torch.utils.weak import TensorWeakRef
@@ -205,6 +209,7 @@ class GuardBuilder(GuardBuilderBase):
         self.lookup_weakrefs = lookup_weakrefs
         self.scope: Dict[str, Dict[str, object]] = {"L": local_scope, "G": global_scope}
         self.scope["__builtins__"] = builtins.__dict__.copy()
+        self.scope["G"]["___stored_objs_by_id"] = {}
         for (
             name,
             package_module,
@@ -335,9 +340,9 @@ class GuardBuilder(GuardBuilderBase):
             # Increase the scope of ID_MATCH'd objects.
             if isinstance(val, torch.nn.Module):
                 local_name = guard.originating_source.local_name
-                weak_id = self.lookup_weakrefs(val)
-                if weak_id is not None:
-                    self.id_matched_objs[local_name] = weak_id
+                weak_obj = self.lookup_weakrefs(val)
+                if weak_obj is not None:
+                    self.id_matched_objs[local_name] = weak_obj
 
     def NAME_MATCH(self, guard: Guard):
         obj = self.get(guard.name)
@@ -733,6 +738,19 @@ class GuardBuilder(GuardBuilderBase):
                 self.tensor_check_names.append(tensor_name)
                 self.tensor_check_examples.append(value)
                 self.tensor_check_guards.append(guard)
+
+            # Nested Tensor ctx - "ragged_size" is symint placeholder, "requires_grad" is guarded upon
+            if is_traceable_wrapper_subclass(value) and not isinstance(
+                value, NestedTensor
+            ):
+                ctx = value.__tensor_flatten__()[1]  # type: ignore[attr-defined]
+                if ctx is not None:
+                    # Assume that the ctx obeys object equality
+                    obj_store = self.get("G['___stored_objs_by_id']")
+                    obj_store[id(ctx)] = copy.deepcopy(ctx)
+                    code.append(
+                        f"{tensor_name}.__tensor_flatten__()[1] == G['___stored_objs_by_id'][{id(ctx)}]"
+                    )
 
             # A frame is valid for reuse with dynamic dimensions if the new dynamic dimensions are a
             # strict subset of the old.
