@@ -85,13 +85,13 @@ class LRScheduler:
         self._initial_step()
 
     def _initial_step(self):
-        """Initialize step counts and performs a step"""
+        """Initialize step counts and performs a step."""
         self.optimizer._step_count = 0
         self._step_count = 0
         self.step()
 
     def state_dict(self):
-        """Returns the state of the scheduler as a :class:`dict`.
+        """Return the state of the scheduler as a :class:`dict`.
 
         It contains an entry for every variable in self.__dict__ which
         is not the optimizer.
@@ -99,7 +99,7 @@ class LRScheduler:
         return {key: value for key, value in self.__dict__.items() if key != 'optimizer'}
 
     def load_state_dict(self, state_dict):
-        """Loads the schedulers state.
+        """Load the scheduler's state.
 
         Args:
             state_dict (dict): scheduler state. Should be an object returned
@@ -108,17 +108,15 @@ class LRScheduler:
         self.__dict__.update(state_dict)
 
     def get_last_lr(self):
-        """ Return last computed learning rate by current scheduler.
-        """
+        """Return last computed learning rate by current scheduler."""
         return self._last_lr
 
     def get_lr(self):
-        # Compute learning rate using chainable form of the scheduler
+        """Compute learning rate using chainable form of the scheduler."""
         raise NotImplementedError
 
     def print_lr(self, is_verbose, group, lr, epoch=None):
-        """Display the current learning rate.
-        """
+        """Display the current learning rate."""
         if is_verbose:
             if epoch is None:
                 print(f'Adjusting learning rate of group {group} to {lr:.4e}.')
@@ -187,8 +185,9 @@ class _enable_get_lr_call:
 
 
 class LambdaLR(LRScheduler):
-    """Sets the learning rate of each parameter group to the initial lr
-    times a given function. When last_epoch=-1, sets initial lr as lr.
+    """Sets the learning rate of each parameter group to the initial lr times a given function.
+
+    When last_epoch=-1, sets initial lr as lr.
 
     Args:
         optimizer (Optimizer): Wrapped optimizer.
@@ -227,7 +226,7 @@ class LambdaLR(LRScheduler):
         super().__init__(optimizer, last_epoch, verbose)
 
     def state_dict(self):
-        """Returns the state of the scheduler as a :class:`dict`.
+        """Return the state of the scheduler as a :class:`dict`.
 
         It contains an entry for every variable in self.__dict__ which
         is not the optimizer.
@@ -236,7 +235,6 @@ class LambdaLR(LRScheduler):
 
         When saving or loading the scheduler, please make sure to also save or load the state of the optimizer.
         """
-
         state_dict = {key: value for key, value in self.__dict__.items() if key not in ('optimizer', 'lr_lambdas')}
         state_dict['lr_lambdas'] = [None] * len(self.lr_lambdas)
 
@@ -247,7 +245,7 @@ class LambdaLR(LRScheduler):
         return state_dict
 
     def load_state_dict(self, state_dict):
-        """Loads the schedulers state.
+        """Load the scheduler's state.
 
         When saving or loading the scheduler, please make sure to also save or load the state of the optimizer.
 
@@ -255,7 +253,6 @@ class LambdaLR(LRScheduler):
             state_dict (dict): scheduler state. Should be an object returned
                 from a call to :meth:`state_dict`.
         """
-
         lr_lambdas = state_dict.pop('lr_lambdas')
         self.__dict__.update(state_dict)
         # Restore state_dict keys in order to prevent side effects
@@ -276,8 +273,9 @@ class LambdaLR(LRScheduler):
 
 
 class MultiplicativeLR(LRScheduler):
-    """Multiply the learning rate of each parameter group by the factor given
-    in the specified function. When last_epoch=-1, sets initial lr as lr.
+    """Multiply the learning rate of each parameter group by the factor given in the specified function.
+
+    When last_epoch=-1, sets initial lr as lr.
 
     Args:
         optimizer (Optimizer): Wrapped optimizer.
@@ -314,7 +312,7 @@ class MultiplicativeLR(LRScheduler):
         super().__init__(optimizer, last_epoch, verbose)
 
     def state_dict(self):
-        """Returns the state of the scheduler as a :class:`dict`.
+        """Return the state of the scheduler as a :class:`dict`.
 
         It contains an entry for every variable in self.__dict__ which
         is not the optimizer.
@@ -331,7 +329,7 @@ class MultiplicativeLR(LRScheduler):
         return state_dict
 
     def load_state_dict(self, state_dict):
-        """Loads the schedulers state.
+        """Load the schedulers state.
 
         Args:
             state_dict (dict): scheduler state. Should be an object returned
@@ -360,8 +358,9 @@ class MultiplicativeLR(LRScheduler):
 
 
 class StepLR(LRScheduler):
-    """Decays the learning rate of each parameter group by gamma every
-    step_size epochs. Notice that such decay can happen simultaneously with
+    """Decays the learning rate of each parameter group by gamma every step_size epochs.
+
+    Notice that such decay can happen simultaneously with
     other changes to the learning rate from outside this scheduler. When
     last_epoch=-1, sets initial lr as lr.
 
@@ -413,9 +412,10 @@ class StepLR(LRScheduler):
 
 
 class MultiStepLR(LRScheduler):
-    """Decays the learning rate of each parameter group by gamma once the
-    number of epoch reaches one of the milestones. Notice that such decay can
-    happen simultaneously with other changes to the learning rate from outside
+    """Decays the learning rate of each parameter group by gamma once the number of epoch reaches one of the milestones.
+
+    Notice that such decay can happen simultaneously
+    with other changes to the learning rate from outside
     this scheduler. When last_epoch=-1, sets initial lr as lr.
 
     Args:
@@ -466,9 +466,12 @@ class MultiStepLR(LRScheduler):
 
 
 class ConstantLR(LRScheduler):
-    """Decays the learning rate of each parameter group by a small constant factor until the
-    number of epoch reaches a pre-defined milestone: total_iters. Notice that such decay can
-    happen simultaneously with other changes to the learning rate from outside this scheduler.
+    """Decays the learning rate of each parameter group by a small constant factor.
+
+    Until the number of epoch reaches a pre-defined milestone: total_iters.
+
+    Notice that such decay can happen simultaneously
+    with other changes to the learning rate from outside this scheduler.
     When last_epoch=-1, sets initial lr as lr.
 
     Args:
@@ -526,8 +529,10 @@ class ConstantLR(LRScheduler):
 
 
 class LinearLR(LRScheduler):
-    """Decays the learning rate of each parameter group by linearly changing small
-    multiplicative factor until the number of epoch reaches a pre-defined milestone: total_iters.
+    """Decays the learning rate of each parameter group by linearly changing small multiplicative factor.
+
+    Until the number of epoch reaches a pre-defined milestone: total_iters.
+
     Notice that such decay can happen simultaneously with other changes to the learning rate
     from outside this scheduler. When last_epoch=-1, sets initial lr as lr.
 
@@ -599,6 +604,7 @@ class LinearLR(LRScheduler):
 
 class ExponentialLR(LRScheduler):
     """Decays the learning rate of each parameter group by gamma every epoch.
+
     When last_epoch=-1, sets initial lr as lr.
 
     Args:
@@ -633,9 +639,11 @@ class ExponentialLR(LRScheduler):
 
 
 class SequentialLR(LRScheduler):
-    """Receives the list of schedulers that is expected to be called sequentially during
-    optimization process and milestone points that provides exact intervals to reflect
-    which scheduler is supposed to be called at a given epoch.
+    """
+    Receives the list of schedulers that is expected to be called sequentially during optimization process.
+
+    This class uses milestone points that provide exact intervals to
+    reflect which scheduler is supposed to be called at a given epoch.
 
     Args:
         optimizer (Optimizer): Wrapped optimizer.
@@ -715,7 +723,7 @@ class SequentialLR(LRScheduler):
         self._last_lr = scheduler.get_last_lr()
 
     def state_dict(self):
-        """Returns the state of the scheduler as a :class:`dict`.
+        """Return the state of the scheduler as a :class:`dict`.
 
         It contains an entry for every variable in self.__dict__ which
         is not the optimizer.
@@ -730,7 +738,7 @@ class SequentialLR(LRScheduler):
         return state_dict
 
     def load_state_dict(self, state_dict):
-        """Loads the schedulers state.
+        """Load the scheduler's state.
 
         Args:
             state_dict (dict): scheduler state. Should be an object returned
@@ -747,8 +755,9 @@ class SequentialLR(LRScheduler):
 
 
 class PolynomialLR(LRScheduler):
-    """Decays the learning rate of each parameter group using a polynomial function
-    in the given total_iters. When last_epoch=-1, sets initial lr as lr.
+    """Decays the learning rate of each parameter group using a polynomial function in the given total_iters.
+
+    When last_epoch=-1, sets initial lr as lr.
 
     Args:
         optimizer (Optimizer): Wrapped optimizer.
@@ -801,8 +810,9 @@ class PolynomialLR(LRScheduler):
 
 
 class CosineAnnealingLR(LRScheduler):
-    r"""Set the learning rate of each parameter group using a cosine annealing
-    schedule, where :math:`\eta_{max}` is set to the initial lr and
+    r"""Set the learning rate of each parameter group using a cosine annealing schedule.
+
+    :math:`\eta_{max}` is set to the initial lr and
     :math:`T_{cur}` is the number of epochs since the last restart in SGDR:
 
     .. math::
@@ -878,9 +888,10 @@ class CosineAnnealingLR(LRScheduler):
 
 
 class ChainedScheduler(LRScheduler):
-    """Chains list of learning rate schedulers. It takes a list of chainable learning
-    rate schedulers and performs consecutive step() functions belonging to them by just
-    one call.
+    """Chains list of learning rate schedulers.
+
+    It takes a list of chainable learning rate schedulers and performs
+    their step() functions consecutively with just one call.
 
     Args:
         schedulers (list): List of chained schedulers.
@@ -919,7 +930,7 @@ class ChainedScheduler(LRScheduler):
         self._last_lr = [group['lr'] for group in self._schedulers[-1].optimizer.param_groups]
 
     def state_dict(self):
-        """Returns the state of the scheduler as a :class:`dict`.
+        """Return the state of the scheduler as a :class:`dict`.
 
         It contains an entry for every variable in self.__dict__ which
         is not the optimizer.
@@ -934,7 +945,7 @@ class ChainedScheduler(LRScheduler):
         return state_dict
 
     def load_state_dict(self, state_dict):
-        """Loads the schedulers state.
+        """Load the scheduler's state.
 
         Args:
             state_dict (dict): scheduler state. Should be an object returned
@@ -952,6 +963,7 @@ class ChainedScheduler(LRScheduler):
 
 class ReduceLROnPlateau(LRScheduler):
     """Reduce learning rate when a metric has stopped improving.
+
     Models often benefit from reducing the learning rate by a factor
     of 2-10 once learning stagnates. This scheduler reads a metrics
     quantity and if no improvement is seen for a 'patience' number
@@ -1042,7 +1054,7 @@ class ReduceLROnPlateau(LRScheduler):
         self._reset()
 
     def _reset(self):
-        """Resets num_bad_epochs counter and cooldown counter."""
+        """Reset num_bad_epochs counter and cooldown counter."""
         self.best = self.mode_worse
         self.cooldown_counter = 0
         self.num_bad_epochs = 0
@@ -1123,10 +1135,10 @@ class ReduceLROnPlateau(LRScheduler):
 
 
 class CyclicLR(LRScheduler):
-    r"""Sets the learning rate of each parameter group according to
-    cyclical learning rate policy (CLR). The policy cycles the learning
-    rate between two boundaries with a constant frequency, as detailed in
-    the paper `Cyclical Learning Rates for Training Neural Networks`_.
+    r"""Sets the learning rate of each parameter group according to cyclical learning rate policy (CLR).
+
+    The policy cycles the learning rate between two boundaries with a constant frequency,
+    as detailed in the paper `Cyclical Learning Rates for Training Neural Networks`_.
     The distance between the two boundaries can be scaled on a per-iteration
     or per-cycle basis.
 
@@ -1322,13 +1334,13 @@ class CyclicLR(LRScheduler):
         return gamma ** x
 
     def get_lr(self):
-        """Calculates the learning rate at batch index. This function treats
-        `self.last_epoch` as the last batch index.
+        """Calculate the learning rate at batch index.
+
+        This function treats `self.last_epoch` as the last batch index.
 
         If `self.cycle_momentum` is ``True``, this function has a side effect of
         updating the optimizer's momentum.
         """
-
         if not self._get_lr_called_within_step:
             warnings.warn("To get the last learning rate computed by the scheduler, "
                           "please use `get_last_lr()`.", UserWarning)
@@ -1386,8 +1398,9 @@ class CyclicLR(LRScheduler):
 
 
 class CosineAnnealingWarmRestarts(LRScheduler):
-    r"""Set the learning rate of each parameter group using a cosine annealing
-    schedule, where :math:`\eta_{max}` is set to the initial lr, :math:`T_{cur}`
+    r"""Set the learning rate of each parameter group using a cosine annealing schedule.
+
+    :math:`\eta_{max}` is set to the initial lr, :math:`T_{cur}`
     is the number of epochs since the last restart and :math:`T_{i}` is the number
     of epochs between two warm restarts in SGDR:
 
@@ -1441,7 +1454,7 @@ class CosineAnnealingWarmRestarts(LRScheduler):
                 for base_lr in self.base_lrs]
 
     def step(self, epoch=None):
-        """Step could be called after every batch update
+        """Step could be called after every batch update.
 
         Example:
             >>> # xdoctest: +SKIP("Undefined vars")
@@ -1467,7 +1480,6 @@ class CosineAnnealingWarmRestarts(LRScheduler):
             >>> scheduler.step(26)
             >>> scheduler.step() # scheduler.step(27), instead of scheduler(20)
         """
-
         if epoch is None and self.last_epoch < 0:
             epoch = 0
 
@@ -1514,8 +1526,9 @@ class CosineAnnealingWarmRestarts(LRScheduler):
 
 
 class OneCycleLR(LRScheduler):
-    r"""Sets the learning rate of each parameter group according to the
-    1cycle learning rate policy. The 1cycle policy anneals the learning
+    r"""Sets the learning rate of each parameter group according to the 1cycle learning rate policy.
+
+    The 1cycle policy anneals the learning
     rate from an initial learning rate to some maximum learning rate and then
     from that maximum learning rate to some minimum learning rate much lower
     than the initial learning rate.
@@ -1619,6 +1632,7 @@ class OneCycleLR(LRScheduler):
     .. _Super-Convergence\: Very Fast Training of Neural Networks Using Large Learning Rates:
         https://arxiv.org/abs/1708.07120
     """
+
     def __init__(self,
                  optimizer,
                  max_lr,
@@ -1747,13 +1761,13 @@ class OneCycleLR(LRScheduler):
 
     @staticmethod
     def _annealing_cos(start, end, pct):
-        "Cosine anneal from `start` to `end` as pct goes from 0.0 to 1.0."
+        """Cosine anneal from `start` to `end` as pct goes from 0.0 to 1.0."""
         cos_out = math.cos(math.pi * pct) + 1
         return end + (start - end) / 2.0 * cos_out
 
     @staticmethod
     def _annealing_linear(start, end, pct):
-        "Linearly anneal from `start` to `end` as pct goes from 0.0 to 1.0."
+        """Linearly anneal from `start` to `end` as pct goes from 0.0 to 1.0."""
         return (end - start) * pct + start
 
     def get_lr(self):
