@@ -388,6 +388,7 @@ at::Device ProcessGroupNCCL::guessDeviceForRank() const {
 }
 
 const int64_t ProcessGroupNCCL::kWatchdogThreadSleepMillis = 100;
+const int64_t ProcessGroupNCCL::kWaitForAbortCommStoreKey = ProcessGroupNCCL::kWatchdogThreadSleepMillis / 10;
 constexpr int64_t kSynchronizeBusyWaitMillis = 10;
 thread_local uint64_t ProcessGroupNCCL::ncclActiveGroupCounter_ = 0;
 
@@ -461,6 +462,7 @@ ProcessGroupNCCL::WorkNCCL::WorkNCCL(const WorkNCCL& w)
       numelIn_(w.numelIn_),
       numelOut_(w.numelOut_),
       store_(w.store_),
+      abortedComms_(w.abortedComms_),
       timingEnabled_(w.timingEnabled_),
       trace_id_(w.trace_id_),
       distDebugLevel_(w.distDebugLevel_) {
@@ -702,6 +704,14 @@ bool ProcessGroupNCCL::WorkNCCL::wait(std::chrono::milliseconds timeout) {
 void ProcessGroupNCCL::WorkNCCL::abort() {
   // Abort all communicators of this work
   for (const auto& ncclComm : ncclComms_) {
+    LOG(INFO) << logPrefix() << "Aborting comm" << std::endl;
+    auto abortedCommId = buildNcclUniqueIdStr(ncclComm->getNcclId());
+    auto storeKey = getNcclAbortedCommStoreKey(abortedCommId);
+    TORCH_INTERNAL_ASSERT(store_);
+    TORCH_INTERNAL_ASSERT(abortedComms_);
+    abortedComms_->emplace(abortedCommId);
+    store_->set(storeKey, "");
+    LOG(INFO) << logPrefix() << "Wrote aborted comm " << storeKey << std::endl;
     ncclComm->ncclCommAbort();
   }
 
@@ -1518,6 +1528,41 @@ void ProcessGroupNCCL::watchdogHandler() {
     dumpPipe.emplace(rank_);
   }
   while (!done || !terminateProcessGroup_.load()) {
+    std::unordered_set<std::string> allCommIds;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto it = devNCCLCommMap_.begin(); it != devNCCLCommMap_.end(); it++) {
+          auto& ncclComms = it->second;
+          for (const auto& ncclComm : ncclComms) {
+              allCommIds.emplace(buildNcclUniqueIdStr(ncclComm->getNcclId()));
+          }
+        }
+    }
+    // Abort communicators that have been aborted on other ranks
+    // Otherwise the other ranks may hang indefinitely
+    for (const auto& commId : allCommIds) {
+      // If not already aborted
+      if (abortedComms_.find(commId) == abortedComms_.end()) {
+        const auto& storeKey = getNcclAbortedCommStoreKey(commId);
+        try {
+          store_->wait(
+            {storeKey},
+            std::chrono::milliseconds(kWaitForAbortCommStoreKey));
+          std::lock_guard<std::mutex> lock(mutex_);
+          LOG(ERROR) << logPrefix() << "Found key in store: " << storeKey << ", aborting communicators...";
+          auto it = ncclIdToCommMap_.find(commId);
+          TORCH_INTERNAL_ASSERT(it != ncclIdToCommMap_.end());
+          for (const auto& ncclComm: it->second) {
+            ncclComm->ncclCommAbort();
+          }
+          abortedComms_.emplace(commId);
+         LOG(ERROR) << logPrefix() << "Aborted key in store: " << storeKey << ".";
+        } catch (c10::Error& e) {
+          VLOG(1) << "Did not find key in store: " << storeKey << ",  error: " << e.what();
+        }
+      }
+    }
+
     std::unique_lock<std::mutex> lock(workMetaListMutex_);
     // We busy-poll the work vector every kWatchdogThreadSleepMillis
     // milliseconds as long as the atomic is True.
@@ -2400,6 +2445,7 @@ c10::intrusive_ptr<Work> ProcessGroupNCCL::endCoalescing() {
   work->avoidRecordStreams_ = avoidRecordStreams_;
   work->opTimeout_ = options_->timeout;
   work->store_ = store_;
+  work->abortedComms_ = &abortedComms_;
   if (avoidRecordStreams_) {
     // other functions expect an initialized ptr if avoidRecordStreams_ is set
     work->stashed_for_allocator_safety_ =
@@ -2595,6 +2641,7 @@ c10::intrusive_ptr<Work> ProcessGroupNCCL::collective(
   work->avoidRecordStreams_ = avoidRecordStreams;
   work->opTimeout_ = options_->timeout;
   work->store_ = store_;
+  work->abortedComms_ = &abortedComms_;
   // Record size info for debug. We only record the size on the first device as
   // multi-device per process is deprecated
   work->numelIn_ = inputs[0].numel();
@@ -2752,6 +2799,7 @@ c10::intrusive_ptr<Work> ProcessGroupNCCL::pointToPoint(
     work->blockingWait_ = blockingWait_;
     work->opTimeout_ = options_->timeout;
     work->store_ = store_;
+    work->abortedComms_ = &abortedComms_;
   }
 
   // Record size info for debug. We only record the size on the first device as
