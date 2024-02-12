@@ -833,19 +833,17 @@ def cached_autotune(
             configs = [best_config]
 
         def save_cache_hook(cfg, found_by_coordesc=False):
-            with lock:
-                with open(cache_filename, "w") as fd:
-                    fd.write(
-                        json.dumps(
-                            {
-                                **cfg.kwargs,
-                                "num_warps": cfg.num_warps,
-                                "num_stages": cfg.num_stages,
-                                "configs_hash": configs_hash,
-                                "found_by_coordesc": found_by_coordesc,
-                            }
-                        )
-                    )
+            with lock, open(cache_filename, "w") as fd:
+                json.dump(
+                    {
+                        **cfg.kwargs,
+                        "num_warps": cfg.num_warps,
+                        "num_stages": cfg.num_stages,
+                        "configs_hash": configs_hash,
+                        "found_by_coordesc": found_by_coordesc,
+                    },
+                    fd
+                )
             if log.isEnabledFor(logging.DEBUG):
                 type_str = "coordesc" if found_by_coordesc else "heuristic"
                 log.debug("Save %s tuning result to %s", type_str, cache_filename)
