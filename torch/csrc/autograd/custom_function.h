@@ -392,8 +392,8 @@ variable_list CppNode<T>::apply(variable_list&& inputs) {
   if (num_outputs != num_forward_inputs) {
     std::string msg("function ");
     msg += name() + " returned an incorrect number of gradients (expected ";
-    msg += c10::to_string(num_forward_inputs) + ", got ";
-    msg += c10::to_string(num_outputs) + ")";
+    msg += std::to_string(num_forward_inputs) + ", got ";
+    msg += std::to_string(num_outputs) + ")";
     throw std::runtime_error(msg);
   }
 
@@ -406,7 +406,7 @@ variable_list CppNode<T>::apply(variable_list&& inputs) {
         std::string msg("function ");
         msg += name() +
             " returned a gradient different that is defined at position ";
-        msg += c10::to_string(i + 1) +
+        msg += std::to_string(i + 1) +
             ", but the corresponding forward input was not a Variable";
         throw std::runtime_error(msg);
       }
