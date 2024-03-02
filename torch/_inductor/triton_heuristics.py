@@ -13,6 +13,7 @@ import re
 import threading
 from enum import auto, Enum
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from filelock import FileLock
 
 import torch
 
@@ -833,22 +834,23 @@ def cached_autotune(
     if filename is not None and (len(configs) > 1 or config.coordinate_descent_tuning):
         cache_filename = os.path.splitext(filename)[0] + ".best_config"
         configs_hash = hash_configs(configs)
-        best_config = load_cached_autotuning(cache_filename, configs_hash, configs)
+        lock = FileLock(cache_filename + ".lock", mode=0o777)
+        with lock:
+            best_config = load_cached_autotuning(cache_filename, configs_hash, configs)
         if best_config:
             configs = [best_config]
 
         def save_cache_hook(cfg, found_by_coordesc=False):
-            with open(cache_filename, "w") as fd:
-                fd.write(
-                    json.dumps(
-                        {
-                            **cfg.kwargs,
-                            "num_warps": cfg.num_warps,
-                            "num_stages": cfg.num_stages,
-                            "configs_hash": configs_hash,
-                            "found_by_coordesc": found_by_coordesc,
-                        }
-                    )
+            with lock, open(cache_filename, "w") as fd:
+                json.dump(
+                    {
+                        **cfg.kwargs,
+                        "num_warps": cfg.num_warps,
+                        "num_stages": cfg.num_stages,
+                        "configs_hash": configs_hash,
+                        "found_by_coordesc": found_by_coordesc,
+                    },
+                    fd
                 )
             if log.isEnabledFor(logging.DEBUG):
                 type_str = "coordesc" if found_by_coordesc else "heuristic"
