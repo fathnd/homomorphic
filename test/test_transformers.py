@@ -3520,10 +3520,19 @@ class TestAttnBias(NNTestCase):
         bsz, num_heads, seq_len_q, seq_len_kv, head_dim, window_size_left, window_size_right = shape_window
         make_q_tensor = partial(make_tensor, SdpaShape(bsz, num_heads, seq_len_q, head_dim))
         make_kv_tensor = partial(make_tensor, SdpaShape(bsz, num_heads, seq_len_kv, head_dim))
-        if window_size_left + window_size_right < abs(seq_len_q - seq_len_kv):
-            self.skipTest(
-                "There will exist full masked out rows producing nans!"
-            )
+        look_back = window_size_left + 1
+        look_forward = window_size_right + 1
+        if seq_len_q > seq_len_kv:
+            if causal_variant == CausalVariant.LOWER_RIGHT:
+                if look_back < seq_len_q - seq_len_kv:
+                    self.skipTest(
+                        "There will exist fully masked out row at the end of the matrix"
+                    )
+            if causal_variant == CausalVariant.UPPER_LEFT:
+                if look_forward < seq_len_q - seq_len_kv:
+                    self.skipTest(
+                        "There will exist fully masked out row at the start of the matrix"
+                    )
 
         attn_bias = SlidingWindowBias(
             causal_variant, window_size_left, window_size_right, seq_len_q, seq_len_kv
