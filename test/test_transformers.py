@@ -3515,7 +3515,7 @@ class TestAttnBias(NNTestCase):
         causal_variant: CausalVariant,
         shape_window: List[Tuple[int]],
     ):
-        make_tensor = partial(torch.rand, device=device, dtype=torch.bfloat16, requires_grad=True)
+        make_tensor = partial(torch.rand, device=device, dtype=torch.float16, requires_grad=True)
 
         bsz, num_heads, seq_len_q, seq_len_kv, head_dim, window_size_left, window_size_right = shape_window
         make_q_tensor = partial(make_tensor, SdpaShape(bsz, num_heads, seq_len_q, head_dim))
