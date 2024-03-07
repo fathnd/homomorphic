@@ -349,13 +349,54 @@ def causal_lower_right(*size) -> CausalBias:
     return CausalBias(CausalVariant.LOWER_RIGHT, seq_len_q, seq_len_kv)
 
 
-class SlidingWindowBias:
-    """
-    A bias representing sliding window attention patterns.
+class SlidingWindowBias(torch.Tensor):
+    r"""
+    Computes a sliding window attention bias that can be used with the scaled dot-product attention (SDPA) mechanism.
 
-    This class is used for defining sliding window attention biases, an attention pattern that restricts
-    the attention window to a fixed size. For construing the bias, there exists a factory function: :func:`sliding_window'.
+    The sliding window attention bias allows each query to attend to a specific window or neighborhood of keys
+    around its corresponding position. The window size is defined by two parameters: `window_size_left` and
+    `window_size_right`, which specify the number of positions to the left and right of the query position,
+    respectively.
 
+    For a query at position `i`, the bias allows it to attend to keys within the range:
+    `[i - window_size_left, i + window_size_right]`, while masking out keys outside this range.
+
+    The `SlidingWindowBias` class supports two variants:
+        - `UPPER_LEFT`: The first row in the attention matrix corresponds to the query at position 0.
+        - `LOWER_RIGHT`: The last row in the attention matrix corresponds to the query at position `seq_len_kv`.
+
+    The `seq_len_q` and `seq_len_kv` parameters specify the sequence lengths of the query and key/value tensors,
+    respectively. When `seq_len_q` is not equal to `seq_len_kv`, the behavior depends on the chosen variant.
+
+    This class is designed to be used with the :func:`torch.nn.functional.scaled_dot_product_attention` and supports fused kernel
+    execution when  the input satisfies the required constraints for Flash Attention (FAv2).
+
+    Args:
+        variant (CausalVariant): The type of causal bias to use (either `UPPER_LEFT` or `LOWER_RIGHT`).
+        window_size_left (Optional[int]): The size of the left side of the window. If None, the window is unbounded.
+        window_size_right (Optional[int]): The size of the right side of the window. If None, the window is unbounded.
+        seq_len_q (int): The sequence length of the query tensor.
+        seq_len_kv (int): The sequence length of the key/value tensor.
+
+    Returns:
+        SlidingWindowBias: A sliding window attention bias object that can be passed as the `attn_mask` parameter to
+        the :func:`torch.nn.functional.scaled_dot_product_attention` function.
+
+    Notes:
+        - The `SlidingWindowBias` class is designed to be used with :func:`torch.nn.functional.scaled_dot_product_attention`
+
+    Examples:
+        .. code-block:: python
+
+            >>> from torch.nn.attention.bias import SlidingWindowBias, CausalVariant
+            >>> bias = SlidingWindowBias(CausalVariant.UPPER_LEFT, window_size_left=2, window_size_right=0,
+            ...                          seq_len_q=5, seq_len_kv=5)
+            >>> print(bias._materialize())
+            tensor([[ True, False, False, False, False],
+                    [ True,  True, False, False, False],
+                    [ True,  True,  True, False, False],
+                    [False,  True,  True,  True, False],
+                    [False, False,  True,  True,  True]])
     """
 
     def __init__(
