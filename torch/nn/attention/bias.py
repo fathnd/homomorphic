@@ -362,8 +362,8 @@ class SlidingWindowBias(torch.Tensor):
     `[i - window_size_left, i + window_size_right]`, while masking out keys outside this range.
 
     The `SlidingWindowBias` class supports two variants:
-        - `UPPER_LEFT`: The first row in the attention matrix corresponds to the query at position 0.
-        - `LOWER_RIGHT`: The last row in the attention matrix corresponds to the query at position `seq_len_kv`.
+     - `UPPER_LEFT`: The first row in the attention matrix corresponds to the query at position 0.
+     - `LOWER_RIGHT`: The last row in the attention matrix corresponds to the query at position `seq_len_kv`.
 
     The `seq_len_q` and `seq_len_kv` parameters specify the sequence lengths of the query and key/value tensors,
     respectively. When `seq_len_q` is not equal to `seq_len_kv`, the behavior depends on the chosen variant.
@@ -382,21 +382,16 @@ class SlidingWindowBias(torch.Tensor):
         SlidingWindowBias: A sliding window attention bias object that can be passed as the `attn_mask` parameter to
         the :func:`torch.nn.functional.scaled_dot_product_attention` function.
 
-    Notes:
-        - The `SlidingWindowBias` class is designed to be used with :func:`torch.nn.functional.scaled_dot_product_attention`
+    Examples::
 
-    Examples:
-        .. code-block:: python
-
-            >>> from torch.nn.attention.bias import SlidingWindowBias, CausalVariant
-            >>> bias = SlidingWindowBias(CausalVariant.UPPER_LEFT, window_size_left=2, window_size_right=0,
-            ...                          seq_len_q=5, seq_len_kv=5)
-            >>> print(bias._materialize())
-            tensor([[ True, False, False, False, False],
-                    [ True,  True, False, False, False],
-                    [ True,  True,  True, False, False],
-                    [False,  True,  True,  True, False],
-                    [False, False,  True,  True,  True]])
+        >>> from torch.nn.attention.bias import SlidingWindowBias, CausalVariant
+        >>> bias = SlidingWindowBias(CausalVariant.UPPER_LEFT, window_size_left=2, window_size_right=0, seq_len_q=5, seq_len_kv=5)
+        >>> print(bias)
+        tensor([[ True, False, False, False, False],
+                [ True,  True, False, False, False],
+                [ True,  True,  True, False, False],
+                [False,  True,  True,  True, False],
+                [False, False,  True,  True,  True]])
     """
 
     def __init__(
