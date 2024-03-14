@@ -37,14 +37,24 @@ on:
         required: false
         type: string
         default: ""
-    secrets:
+      s3-bucket:
+        description: S3 bucket to download artifact
+        required: false
+        type: string
+        default: "gha-artifacts"
+      aws-role-to-assume:
+        description: role to assume for downloading artifacts
+        required: false
+        type: string
+        default: ""
       HUGGING_FACE_HUB_TOKEN:
         required: false
-        description: |
-          HF Auth token to avoid rate limits when downloading models or datasets from hub
+        type: string
+        description: HF Auth token to avoid rate limits when downloading models or datasets from hub
 
 env:
   GIT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+  ACTIONS_STEP_DEBUG: true
 
 jobs:
   test:
@@ -70,6 +80,14 @@ jobs:
 
       - name: Setup Linux
         uses: ./.github/actions/setup-linux
+
+      - name: configure aws credentials
+        if : ${{ inputs.aws-role-to-assume != '' }}
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          role-to-assume: ${{ inputs.aws-role-to-assume }}
+          role-session-name: gha-linux-test
+          aws-region: us-east-1
 
       - name: Calculate docker image
         id: calculate-docker-image
@@ -116,6 +134,7 @@ jobs:
         uses: ./.github/actions/download-build-artifacts
         with:
           name: ${{ inputs.build-environment }}
+          s3-bucket: ${{ inputs.s3-bucket }}
 
       - name: Download TD artifacts
         continue-on-error: true
@@ -290,6 +309,7 @@ jobs:
         with:
           file-suffix: ${{ github.job }}-${{ matrix.config }}-${{ matrix.shard }}-${{ matrix.num_shards }}-${{ matrix.runner }}_${{ steps.get-job-id.outputs.job-id }}
           use-gha: ${{ inputs.use-gha }}
+          s3-bucket: ${{ inputs.s3-bucket }}
 
       - name: Collect backtraces from coredumps (if any)
         if: always()
