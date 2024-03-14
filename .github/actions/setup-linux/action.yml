@@ -2,11 +2,19 @@ name: Setup Linux
 
 description: Set up Docker workspace on EC2
 
+inputs:
+  is_arc:
+    description: A flag indicating that we are using an arc runner.
+    type: boolean
+    required: false
+    default: false
+
 runs:
   using: composite
   steps:
     - name: Display EC2 information
       shell: bash
+      if: ${{ inputs.is_arc == 'false' }}
       run: |
         set -euo pipefail
         function get_ec2_metadata() {
@@ -29,10 +37,12 @@ runs:
     - name: Start docker if docker deamon is not running
       shell: bash
       run: |
-        if systemctl is-active --quiet docker; then
-            echo "Docker daemon is running...";
-        else
-            echo "Starting docker deamon..." && sudo systemctl start docker;
+        if [ ! -e /.inarc ]; then
+          if systemctl is-active --quiet docker; then
+              echo "Docker daemon is running...";
+          else
+              echo "Starting docker deamon..." && sudo systemctl start docker;
+          fi
         fi
 
     - name: Log in to ECR

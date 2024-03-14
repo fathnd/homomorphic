@@ -2,6 +2,11 @@
 
 set -ex
 
+if [ -e /.inarc ] ; then
+    echo "In INARC, skipping protobuf installation as it should be already available"
+    exit 0
+fi
+
 pb_dir="/usr/temp_pb_install_dir"
 mkdir -p $pb_dir
 
@@ -11,7 +16,8 @@ mkdir -p $pb_dir
 ln -s /usr/lib64 "$pb_dir/lib64"
 
 curl -LO "https://github.com/protocolbuffers/protobuf/releases/download/v3.17.3/protobuf-all-3.17.3.tar.gz" --retry 3
-tar -xvz -C "$pb_dir" --strip-components 1 -f protobuf-all-3.17.3.tar.gz
+
+tar -xvz --no-same-owner -C "$pb_dir" --strip-components 1 -f protobuf-all-3.17.3.tar.gz
 NPROC=$[$(nproc) - 2]
 pushd "$pb_dir" && ./configure && make -j${NPROC} && make -j${NPROC} check && sudo make -j${NRPOC} install && sudo ldconfig
 popd
