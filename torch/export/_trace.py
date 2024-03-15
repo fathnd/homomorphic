@@ -809,6 +809,8 @@ def _export(
             range_constraints = make_constraints(
                 fake_mode,
                 equalities_inputs,
+                dynamic_shapes,
+                ep_non_strict.sig.input_specs,
                 original_signature,
                 ep_non_strict.gm,
             )
