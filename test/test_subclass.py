@@ -15,6 +15,7 @@ from torch.nn.utils.parametrize import (
 from torch.testing._internal.common_subclass import (
     DiagTensorBelow,
     subclass_db,
+    WrapperTensor,
 )
 from torch.testing._internal.common_utils import (
     TestCase,
@@ -25,7 +26,8 @@ from torch.testing._internal.common_utils import (
     subtest,
 )
 from torch.testing._internal.logging_tensor import LoggingTensor
-from torch.utils._pytree import tree_map
+from torch.utils._pytree import tree_map, tree_map_only
+from torch.utils._python_dispatch import handle_subclass_ordering, validate_wrapped_ordering, set_ordering
 
 # The current test methodology in this file is to test a variety of real use cases
 # with a set of fully-fledged tensor subclasses. In the future, this may change
@@ -271,6 +273,75 @@ class TestSubclass(TestCase):
             storage.fill_(0)
         with self.assertRaisesRegex(RuntimeError, "on an invalid python storage"):
             storage._write_file("file")
+
+    def test_priority(self):
+        order = []
+        class BaseUnwrapper(WrapperTensor):
+            @classmethod
+            def get_wrapper_properties(cls, t, requires_grad=False):
+                return t, {}
+
+            def __init__(self, t):
+                validate_wrapped_ordering(self, t)
+                self._t = t
+
+            @handle_subclass_ordering
+            @classmethod
+            def __torch_dispatch__(cls, func, types, args, kwargs=None):
+                order.append(cls.__name__)
+                rs = tree_map_only(torch.Tensor, lambda t: cls(t), func(*tree_map_only(cls, lambda t: t._t, args), **tree_map_only(cls, lambda t: t._t, kwargs or {})))
+                return rs
+
+        class A(BaseUnwrapper):
+            pass
+        set_ordering(A, "__main__.C")
+        set_ordering(A, "torch.testing._internal.logging_tensor.LoggingTensor")
+
+        class B(BaseUnwrapper):
+            pass
+
+        class C(BaseUnwrapper):
+            pass
+
+        class D(C):
+            pass
+
+        class E(D):
+            pass
+
+        tensor = torch.rand(2)
+
+        # Check bad ordering setting
+        with self.assertRaisesRegex(RuntimeError, "Conflicting ordering being added"):
+            set_ordering(C, A)
+        with self.assertRaisesRegex(RuntimeError, "Conflicting ordering being added"):
+            set_ordering(C, D)
+
+        # Ensure defined orderings are correct
+        with self.assertRaisesRegex(RuntimeError, r"Wrapping.*A.*LoggingTensor"):
+            LoggingTensor(A(tensor))
+        with self.assertRaisesRegex(RuntimeError, r"Wrapping.*A.*C"):
+            C(A(tensor))
+        A(LoggingTensor(tensor))
+        A(C(tensor))
+
+        A(B(tensor))
+        B(A(tensor))
+
+
+        # Always put the one that should run first on the right side
+        # to ensure the priority is not from default handling
+        C(tensor) + A(C(tensor))
+        self.assertEqual(order, ['A', 'C'])
+        order = []
+
+        torch.add(A(tensor), B(tensor))
+        self.assertEqual(order, ['B', 'A'])
+        order = []
+
+        C(tensor) + A(B(tensor))
+        self.assertEqual(order, ['A', 'B', 'C'])
+        order = []
 
 
 instantiate_parametrized_tests(TestSubclass)

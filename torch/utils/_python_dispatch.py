@@ -1,8 +1,12 @@
 import contextlib
 from typing import Optional, Union, List, Set, Dict, Any
+import functools
+import importlib
+import inspect
 
 import warnings
 from dataclasses import dataclass
+from collections import defaultdict
 import torch
 import torchgen
 from torch._C import _len_torch_dispatch_stack, _get_dispatch_stack_at, \
@@ -493,3 +497,95 @@ def return_and_correct_aliasing(func, args, kwargs, out):
         for ((i, r), o) in zip(enumerate(schema_info.outs), out)
     ])
     return outs_to_return
+
+
+_SUBLCASS_PRIORITY_RULES = defaultdict(set)
+_SUBCLASS_MAP = {}
+
+@functools.cache
+def _get_cls_name(cls):
+    if isinstance(cls, str):
+        return cls
+    else:
+        name = f"""{getattr(cls, "__module__", "_unknown_mod_")}.{cls.__name__}"""
+        _SUBCLASS_MAP[name] = cls
+        return name
+
+def _get_cls_object(cls_s):
+    if cls_s in _SUBCLASS_MAP:
+        return _SUBCLASS_MAP[cls_s]
+    else:
+        mod_s, name = cls_s.rsplit(".", 1)
+        try:
+            mod = importlib.import_module(mod_s)
+        except:
+            return None
+
+        return getattr(mod, name, None)
+
+@functools.cache
+def _known_lower_priority(cls1_s, cls2_s):
+    if cls1_s is None or cls2_s is None:
+        return False
+
+    if cls1_s == cls2_s:
+        return False
+
+    cls1 = _get_cls_object(cls1_s)
+    cls2 = _get_cls_object(cls2_s)
+    if cls1 and cls2 and issubclass(cls1, cls2):
+        return True
+
+    if cls1_s not in _SUBLCASS_PRIORITY_RULES:
+        return False
+
+    for next_cls_s in _SUBLCASS_PRIORITY_RULES[cls1_s]:
+        next_cls = _get_cls_object(next_cls_s)
+
+        if next_cls_s == cls2_s:
+            return True
+        else:
+            if _known_lower_priority(next_cls_s, cls2_s):
+                return True
+    return False
+
+
+def validate_wrapped_ordering(self, other):
+    self_s = _get_cls_name(type(self))
+    other_s = _get_cls_name(type(other))
+    if _known_lower_priority(other_s, self_s):
+        raise RuntimeError(f"Wrapping an instance of {other_s} in an instance of {self_s} is not allowed")
+
+
+def set_ordering(cls1_, cls2_):
+    cls1_s = _get_cls_name(cls1_)
+    cls2_s = _get_cls_name(cls2_)
+
+    if _known_lower_priority(cls2_s, cls1_s):
+        raise RuntimeError("Conflicting ordering being added")
+
+    _SUBLCASS_PRIORITY_RULES[cls1_s].add(cls2_s)
+    _SUBLCASS_PRIORITY_RULES[cls2_s] = set()
+
+def handle_subclass_ordering(user_fn):
+    if not isinstance(user_fn, classmethod):
+        raise RuntimeError("handle_subclass_ordering wrapper must be above @classmethod")
+
+    if user_fn.__func__.__name__ not in ["__torch_dispatch__", "__torch_function__"]:
+        raise RuntimeError("handle_priority can only be used around torch_dispatch or torch_function")
+
+    @functools.wraps(user_fn)
+    def wrapped_dispatch(cls, func, types, args, kwargs=None):
+        cls_s = _get_cls_name(cls)
+
+        if cls_s in _SUBLCASS_PRIORITY_RULES:
+            for t in types:
+                t_s = _get_cls_name(t)
+                if t_s not in _SUBLCASS_PRIORITY_RULES or \
+                    _known_lower_priority(t_s, cls_s):
+                    return NotImplemented
+
+        # Direct call into the subclass to avoid infinite recursion
+        return user_fn.__func__(cls, func, types, args, kwargs)
+
+    return classmethod(wrapped_dispatch)
