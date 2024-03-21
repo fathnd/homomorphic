@@ -17,8 +17,7 @@
 #endif
 
 
-namespace at {
-namespace native {
+namespace at::native {
 
 namespace {
 
@@ -115,7 +114,7 @@ namespace {
         "but received {", output_size[0], ", ", output_size[1], "}");
 
     if (input.is_mkldnn()) {
-      return at::mkldnn_adaptive_avg_pool2d(input, c10::asIntArrayRefSlow(output_size));
+      return at::mkldnn_adaptive_avg_pool2d(input, C10_AS_INTARRAYREF_SLOW(output_size));
     }
 
     if (!input.is_quantized() && output_size[0] == 1 && output_size[1] == 1 && !input.is_xpu()) {
@@ -140,16 +139,6 @@ namespace {
     }
   }
 
-  Tensor& adaptive_avg_pool2d_backward_out_cpu(
-    Tensor& grad_input,
-    const Tensor& grad_output,
-    const Tensor& input)
-  {
-    adaptive_avg_pool2d_backward_out_cpu_template(
-      grad_input, grad_output, input);
-    return grad_input;
-  }
-
   Tensor adaptive_avg_pool2d_backward_cpu(
     const Tensor& grad_output,
     const Tensor& input)
@@ -163,5 +152,4 @@ namespace {
 DEFINE_DISPATCH(adaptive_avg_pool2d_kernel);
 DEFINE_DISPATCH(adaptive_avg_pool2d_backward_kernel);
 
-} // at::native
-} // at
+} // namespace at::native

@@ -124,6 +124,8 @@ def define_tools_targets(
             "autograd/templates/TraceType.cpp",
             "autograd/templates/VariableType.cpp",
             "autograd/templates/VariableType.h",
+            "autograd/templates/ViewFuncs.cpp",
+            "autograd/templates/ViewFuncs.h",
             "autograd/templates/annotated_fn_args.py.in",
             "autograd/templates/python_enum_tag.cpp",
             "autograd/templates/python_fft_functions.cpp",
@@ -132,6 +134,7 @@ def define_tools_targets(
             "autograd/templates/python_linalg_functions.cpp",
             "autograd/templates/python_nested_functions.cpp",
             "autograd/templates/python_nn_functions.cpp",
+            "autograd/templates/python_return_types.h",
             "autograd/templates/python_return_types.cpp",
             "autograd/templates/python_sparse_functions.cpp",
             "autograd/templates/python_special_functions.cpp",
@@ -211,18 +214,6 @@ def define_tools_targets(
         srcs = [
             "gen_vulkan_spv.py",
         ],
-        base_module = "",
-        deps = [
-            torchgen_deps,
-            ":gen_aten_vulkan_glsl_lib",
-        ],
-    )
-
-    python_library(
-        name = "gen_aten_vulkan_glsl_lib",
-        srcs = [
-            "gen_vulkan_glsl.py",
-        ],
         base_module = "tools",
         deps = [
             torchgen_deps,
@@ -231,12 +222,11 @@ def define_tools_targets(
 
     python_binary(
         name = "gen_aten_vulkan_spv_bin",
-        main_module = "gen_vulkan_spv",
+        main_module = "tools.gen_vulkan_spv",
         visibility = [
             "PUBLIC",
         ],
         deps = [
-            ":gen_aten_vulkan_glsl_lib",
             ":gen_aten_vulkan_spv_lib",
         ],
     )
@@ -249,7 +239,6 @@ def define_tools_targets(
         contacts = contacts,
         visibility = ["PUBLIC"],
         deps = [
-            ":gen_aten_vulkan_glsl_lib",
             ":gen_aten_vulkan_spv_lib",
         ],
     )
@@ -300,5 +289,20 @@ def define_tools_targets(
         deps = [
             torchgen_deps,
             ":autograd",
+        ],
+    )
+
+    python_test(
+        name = "test_torchgen_executorch",
+        srcs = [
+            "test/test_executorch_gen.py",
+            "test/test_executorch_signatures.py",
+            "test/test_executorch_types.py",
+            "test/test_executorch_unboxing.py",
+        ],
+        contacts = contacts,
+        visibility = ["PUBLIC"],
+        deps = [
+            torchgen_deps,
         ],
     )

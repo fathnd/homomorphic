@@ -1,66 +1,122 @@
+# mypy: ignore-errors
+
 from .base import VariableTracker
 from .builtin import BuiltinVariable
 from .constant import ConstantVariable, EnumVariable
-from .dicts import ConstDictVariable, DataClassVariable, DefaultDictVariable
+from .ctx_manager import (
+    ContextWrappingVariable,
+    DeterministicAlgorithmsVariable,
+    DisabledSavedTensorsHooksVariable,
+    GradIncrementNestingCtxManagerVariable,
+    GradInplaceRequiresGradCtxManagerVariable,
+    GradModeVariable,
+    InferenceModeVariable,
+    StreamContextVariable,
+    StreamVariable,
+    VmapIncrementNestingCtxManagerVariable,
+    WithExitFunctionVariable,
+)
+from .dicts import (
+    ConstDictVariable,
+    CustomizedDictVariable,
+    DataClassVariable,
+    DefaultDictVariable,
+    SetVariable,
+)
+from .distributed import BackwardHookVariable
 from .functions import (
+    FunctoolsPartialVariable,
     NestedUserFunctionVariable,
+    SkipFunctionVariable,
     UserFunctionVariable,
     UserMethodVariable,
 )
+from .higher_order_ops import (
+    FunctorchHigherOrderVariable,
+    TorchHigherOrderOperatorVariable,
+)
+from .iter import (
+    CountIteratorVariable,
+    CycleIteratorVariable,
+    IteratorVariable,
+    ItertoolsVariable,
+    RepeatIteratorVariable,
+)
+from .lazy import LazyVariableTracker
 from .lists import (
     BaseListVariable,
     ListIteratorVariable,
     ListVariable,
     NamedTupleVariable,
     RangeVariable,
+    RestrictedListSubclassVariable,
     SliceVariable,
+    TupleIteratorVariable,
     TupleVariable,
 )
 from .misc import (
+    AutogradFunctionContextVariable,
     AutogradFunctionVariable,
-    BlackHoleVariable,
     ClosureVariable,
-    ContextWrappingVariable,
+    DeletedVariable,
     GetAttrVariable,
-    GradModeVariable,
     InspectSignatureVariable,
     LambdaVariable,
+    MethodWrapperVariable,
     NewCellVariable,
     NewGlobalVariable,
     NumpyVariable,
     PythonModuleVariable,
+    StringFormatVariable,
     SuperVariable,
+    TypingVariable,
     UnknownVariable,
-    WithExitFunctionVariable,
 )
 from .nn_module import NNModuleVariable, UnspecializedNNModuleVariable
+
+from .optimizer import OptimizerVariable
+from .sdpa import SDPAParamsVariable
 from .tensor import (
-    DynamicShapeVariable,
     FakeItemVariable,
+    NumpyNdarrayVariable,
+    SymNodeVariable,
     TensorVariable,
-    UnspecializedNumpyVariable,
     UnspecializedPythonVariable,
+    UntypedStorageVariable,
 )
-from .torch import TorchVariable
-from .user_defined import UserDefinedClassVariable, UserDefinedObjectVariable
+from .torch import TorchCtxManagerClassVariable, TorchInGraphFunctionVariable
+from .user_defined import (
+    RemovableHandleVariable,
+    UserDefinedClassVariable,
+    UserDefinedObjectVariable,
+)
 
 __all__ = [
+    "AutogradFunctionContextVariable",
     "AutogradFunctionVariable",
+    "BackwardHookVariable",
     "BaseListVariable",
-    "BlackHoleVariable",
     "BuiltinVariable",
     "ClosureVariable",
     "ConstantVariable",
     "ConstDictVariable",
     "ContextWrappingVariable",
+    "CountIteratorVariable",
+    "CustomizedDictVariable",
+    "CycleIteratorVariable",
     "DataClassVariable",
     "DefaultDictVariable",
+    "DeletedVariable",
+    "DeterministicAlgorithmsVariable",
     "EnumVariable",
     "FakeItemVariable",
     "GetAttrVariable",
     "GradModeVariable",
     "InspectSignatureVariable",
+    "IteratorVariable",
+    "ItertoolsVariable",
     "LambdaVariable",
+    "LazyVariableTracker",
     "ListIteratorVariable",
     "ListVariable",
     "NamedTupleVariable",
@@ -68,22 +124,31 @@ __all__ = [
     "NewCellVariable",
     "NewGlobalVariable",
     "NNModuleVariable",
+    "NumpyNdarrayVariable",
     "NumpyVariable",
     "PythonModuleVariable",
     "RangeVariable",
+    "RemovableHandleVariable",
+    "RepeatIteratorVariable",
+    "RestrictedListSubclassVariable",
+    "SDPAParamsVariable",
+    "SkipFunctionVariable",
     "SliceVariable",
+    "StringFormatVariable",
     "SuperVariable",
     "TensorVariable",
-    "TorchVariable",
+    "TorchCtxManagerClassVariable",
+    "TorchInGraphFunctionVariable",
     "TupleVariable",
     "UnknownVariable",
     "UnspecializedNNModuleVariable",
-    "UnspecializedNumpyVariable",
     "UnspecializedPythonVariable",
+    "UntypedStorageVariable",
     "UserDefinedClassVariable",
     "UserDefinedObjectVariable",
     "UserFunctionVariable",
     "UserMethodVariable",
     "VariableTracker",
     "WithExitFunctionVariable",
+    "OptimizerVariable",
 ]

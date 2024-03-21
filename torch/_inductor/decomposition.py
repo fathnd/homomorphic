@@ -1,320 +1,150 @@
 import functools
 import logging
 import math
-import numbers
+import sys
+import typing
+from typing import Optional
 
 import torch
 import torch._decomp as decomp
-from torch import Tensor
-from torch._decomp import get_decompositions
-from torch._prims_common import is_boolean_dtype, is_integer_dtype
-from torch.utils._mode_utils import no_dispatch
+import torch._prims_common as utils
+import torch.ao.quantization.fx._decomposed
+from torch._decomp import (
+    core_aten_decompositions,
+    get_decompositions,
+    remove_decompositions,
+)
+from torch._decomp.decompositions import (
+    _grid_sampler_2d as decomp_grid_sampler_2d,
+    pw_cast_for_opmath,
+)
+from torch._decomp.decompositions_for_rng import extra_random_decomps
+from torch._higher_order_ops.out_dtype import out_dtype
+from torch._prims_common import (
+    elementwise_dtypes,
+    ELEMENTWISE_TYPE_PROMOTION_KIND,
+    type_to_dtype,
+)
 
-from . import config, utils
+from . import config, inductor_prims
 
 log = logging.getLogger(__name__)
 aten = torch.ops.aten
-log = logging.getLogger(__name__)
+prims = torch.ops.prims
+quantized_decomposed = torch.ops.quantized_decomposed
 
-decompositions = get_decompositions(
+inductor_decompositions = get_decompositions(
     [
         aten._adaptive_avg_pool2d_backward,
-        aten.addcmul,
-        aten.avg_pool2d_backward,
-        aten.binary_cross_entropy_with_logits,
-        aten.clamp_max,
-        aten.clamp_min,
-        aten.col2im,
-        aten.cudnn_batch_norm,
-        aten.cudnn_batch_norm_backward,
-        aten.detach,
-        aten.dot,
-        aten.elu,
-        aten.elu_backward,
-        aten._embedding_bag,
-        aten.embedding_dense_backward,
-        aten.expand_as,
-        aten.eye,
+        aten.arange,
+        aten.bitwise_and_,
+        aten.bitwise_or_,
+        aten.clamp_min_,
+        aten.dist,
+        aten.empty_like,
         aten.flip,
-        aten._fused_moving_avg_obs_fq_helper,
         aten.gelu,
-        aten.gelu_backward,
-        aten.glu_backward,
-        aten.grid_sampler_2d,
-        aten.hardsigmoid,
-        aten.hardsigmoid_backward,
-        aten.hardswish,
-        aten.hardswish_backward,
         aten.hardtanh,
-        aten.hardtanh_backward,
-        aten.im2col,
-        aten.index_add,
-        aten.index_add_,
         aten.index_select,
-        aten.l1_loss,
+        aten.lcm,
         aten.leaky_relu,
-        aten.leaky_relu_backward,
         aten.linalg_vector_norm,
-        aten.logit,
-        aten.logit_backward,
         aten._log_softmax,
-        aten._log_softmax_backward_data,
-        aten.logsumexp.default,
         aten.max_pool2d_with_indices_backward,
-        aten.mse_loss,
-        aten.mse_loss_backward,
-        aten.mv,
-        aten.narrow,
+        aten._native_batch_norm_legit,
+        aten._native_batch_norm_legit_functional,
+        aten._native_batch_norm_legit_no_training,
+        aten._batch_norm_with_update,
+        aten._batch_norm_with_update_functional,
+        aten._batch_norm_no_update,
+        aten.batch_norm_backward,
         aten.native_batch_norm,
-        aten.native_batch_norm_backward,
-        aten.native_dropout_backward,
         aten.native_group_norm,
-        aten.native_group_norm_backward,
         aten.native_layer_norm,
-        aten.native_layer_norm_backward,
-        aten.new_empty,
-        aten.new_full,
-        aten.new_ones,
-        aten.nll_loss_backward,
-        aten.nll_loss_forward,
-        aten.norm,
-        aten.reflection_pad2d_backward,
-        aten._reshape_alias,
-        aten.select_backward,
-        aten.select_scatter,
-        aten.sgn,
-        aten.sigmoid_backward,
-        aten.silu,
-        aten.silu_backward,
-        aten.slice_backward,
+        aten.nll_loss2d_backward,
         aten._softmax,
-        aten._softmax_backward_data,
-        aten.softplus,
-        aten.softplus_backward,
-        aten.stack,
-        aten.std_mean.correction,
-        aten.t,
-        aten.tanh_backward,
-        aten.threshold_backward,
-        aten.transpose.int,
-        aten.tril.default,
-        aten.unfold,
-        aten.unfold_backward,
+        aten.sin_,
+        aten.sqrt_,
+        out_dtype,
+        aten._to_copy,
+        aten.tril_indices,
+        aten.triu_indices,
         aten.upsample_bilinear2d.vec,
-        aten.upsample_nearest2d_backward,
-        aten.softplus,
-        aten.softplus_backward,
-        aten.bucketize,
     ]
 )
+decompositions = {**core_aten_decompositions(), **inductor_decompositions}
+
+# Remove unwanted decompositions included via the core ATen decompositions from
+# the Inductor decomp table.
+decomps_to_exclude = [
+    aten._unsafe_index,
+    aten._scaled_dot_product_flash_attention_for_cpu.default,  # See comments in torch/_decomp/decompositions.py
+    aten.clamp_max,
+    aten.clamp_min,
+    aten.glu,  # inductor lowers this directly
+    aten.split.Tensor,  # inductor lowers this directly
+    aten.squeeze,  # inductor lowers this directly
+    aten.sum,  # inductor lowers this directly
+    aten.unbind,  # inductor lowers this directly
+]
+
+remove_decompositions(decompositions, decomps_to_exclude)
 
 
 def register_decomposition(ops):
     for op in [ops] if callable(ops) else ops:
         if op in decompositions:
-            log.warning(f"duplicate decomp: {ops}")
+            log.warning("duplicate decomp: %s", ops)
     return decomp.register_decomposition(ops, decompositions)
 
 
+# TODO: for now, inductor doesn't handle asserts
+# because the condition is symbool -> tensor in the graph.
+@register_decomposition([aten._assert_async.msg])
+def assert_async_msg_decomp(tensor, msg):
+    return
+
+
+# Following `assert_async_msg_decomp` and implement as non-op.
+@register_decomposition([aten._functional_assert_async.msg])
+def functional_assert_async_msg_decomp(tensor, msg):
+    return
+
+
+@register_decomposition([aten.sym_constrain_range_for_size.default])
+def sym_constrain_range_for_size(symbol, *, min=None, max=None):
+    return
+
+
 @register_decomposition([aten.clamp])
+@pw_cast_for_opmath
 def clamp(x, min=None, max=None):
     if min is not None:
-        x = torch.maximum(x, torch.tensor(min, dtype=x.dtype, device=x.device))
+        x = x.clamp_min(min)
     if max is not None:
-        x = torch.minimum(x, torch.tensor(max, dtype=x.dtype, device=x.device))
+        x = x.clamp_max(max)
     return x
 
 
-@register_decomposition([aten.tanh])
-def tanh(x):
-    return 2.0 / (1.0 + torch.exp(-2.0 * x)) - 1.0
+@register_decomposition([aten.full])
+def full(size, fill_value, **kwargs):
+    dtype = kwargs.get("dtype")
+    if dtype is None:
+        kwargs["dtype"] = type_to_dtype(type(fill_value))
+        return aten.full(size, fill_value, **kwargs)
+    return NotImplemented
 
 
-# TorchInductor-only decomposition. It should not be taken to core.
-# See https://github.com/pytorch/torchdynamo/pull/1120
-@register_decomposition([aten.floor_divide.default])
-def floordiv(a, b):
-    return aten.div.Tensor_mode(a, b, rounding_mode="floor")
-
-
-def get_padded_length(x):
-    if x % config.alignment_size == 0:
-        return 0
-    return int((x // config.alignment_size + 1) * config.alignment_size) - x
-
-
-def pad_dim(x, padded_length, dim):
-    pad = x.new_zeros(*x.shape[:dim], padded_length, *x.shape[dim + 1 :])
-    return torch.cat([x, pad], dim=dim)
-
-
-def check_device_dtype(a: Tensor, b: Tensor):
-    return (
-        a.is_cuda
-        and b.is_cuda
-        and a.dtype == torch.float32
-        and b.dtype == torch.float32
-    )
-
-
-@register_decomposition([aten.addmm])
-def addmm(input, mat1, mat2, *, beta=1, alpha=1):
-    if config.triton.mm != "aten":
-        out = torch.mm(mat1, mat2)
-        if not isinstance(alpha, numbers.Number) or alpha != 1:
-            out = out * alpha
-        if not isinstance(beta, numbers.Number) or beta != 1:
-            input = input * beta
-        return input + out
-
-    if (
-        config.shape_padding
-        and check_device_dtype(mat1, mat2)
-        and should_pad_bench(mat1, mat2, torch.ops.aten.addmm, input=input)
-    ):
-        m_padded_length = get_padded_length(mat1.shape[0])
-        k_padded_length = get_padded_length(mat1.shape[1])
-        n_padded_length = get_padded_length(mat2.shape[1])
-
-        if k_padded_length != 0:
-            mat1 = pad_dim(mat1, k_padded_length, 1)
-            mat2 = pad_dim(mat2, k_padded_length, 0)
-        elif m_padded_length != 0:
-            mat1 = pad_dim(mat1, m_padded_length, 0)
-        elif n_padded_length != 0:
-            mat2 = pad_dim(mat2, n_padded_length, 1)
-
-        if input is not None and k_padded_length == 0:
-            if m_padded_length != 0 and input.dim() == 2:
-                input = pad_dim(input, m_padded_length, 0)
-            elif n_padded_length != 0:
-                if input.dim() == 2:
-                    input = pad_dim(input, n_padded_length, 1)
-                elif input.dim() == 1:
-                    input = pad_dim(input, n_padded_length, 0)
-
-        if k_padded_length != 0:
-            return torch.ops.aten.addmm(input, mat1, mat2, beta=beta, alpha=alpha)
-        elif m_padded_length != 0:
-            return torch.ops.aten.addmm(input, mat1, mat2, beta=beta, alpha=alpha)[
-                :-m_padded_length, :
-            ]
-        elif n_padded_length != 0:
-            return torch.ops.aten.addmm(input, mat1, mat2, beta=beta, alpha=alpha)[
-                :, :-n_padded_length
-            ]
-
-    return NotImplemented  # go directly to lowering
-
-
-def should_pad_bench(mat1, mat2, op, input=None):
-    with no_dispatch():
-        if op is torch.ops.aten.mm or op is torch.ops.aten.addmm:
-            m_padded_length = get_padded_length(mat1.shape[0])
-            k_padded_length = get_padded_length(mat1.shape[1])
-            n_padded_length = get_padded_length(mat2.shape[1])
-        elif op is torch.ops.aten.bmm:
-            m_padded_length = get_padded_length(mat1.shape[1])
-            k_padded_length = get_padded_length(mat1.shape[2])
-            n_padded_length = get_padded_length(mat2.shape[2])
-        else:
-            return False
-
-        if m_padded_length == k_padded_length == n_padded_length == 0:
-            return False
-
-        mat1 = torch.randn_like(mat1)
-        mat2 = torch.randn_like(mat2)
-        warmup = 5
-        rep = 100
-        if op is torch.ops.aten.bmm or op is torch.ops.aten.mm:
-            ori_time = utils.do_bench(
-                lambda: op(mat1, mat2), warmup=warmup, rep=rep, fast_flush=True
-            )[0]
-        else:
-            if input is not None:
-                input = torch.randn_like(input)
-            ori_time = utils.do_bench(
-                lambda: op(input, mat1, mat2), warmup=warmup, rep=rep, fast_flush=True
-            )[0]
-
-        mat1_pad = mat1.new_empty([get_padded_length(i) + i for i in mat1.shape])
-        mat2_pad = mat2.new_empty([get_padded_length(i) + i for i in mat2.shape])
-        if op is torch.ops.aten.addmm:
-            input_pad = None
-            if input is not None and input.is_cuda and input.dtype == torch.float32:
-                input_pad = input.new_empty(
-                    [get_padded_length(i) + i for i in input.shape]
-                )
-            pad_time = utils.do_bench(
-                lambda: op(input_pad, mat1_pad, mat2_pad),
-                warmup=warmup,
-                rep=rep,
-                fast_flush=True,
-            )[0]
-        else:
-            pad_time = utils.do_bench(
-                lambda: op(mat1_pad, mat2_pad), warmup=warmup, rep=rep, fast_flush=True
-            )[0]
-
-        # Shape padding introduces addtional memory ops. Based on microbenchmarks, 1.3x for
-        # aten.mm and aten.addmm and 2x for aten.bmm represent a reasonable tradeoff between
-        # performance improvement from shape padding and overhead from addtional memory ops
-        # TODO: Build a learned model which would be better than this heuristic
-        if op is torch.ops.aten.mm or op is torch.ops.aten.addmm:
-            return ori_time > pad_time * 1.3
-        else:
-            return ori_time > pad_time * 2
-
-
-@register_decomposition([aten.mm])
-def mm_decomp(mat1, mat2):
-    if (
-        config.shape_padding
-        and check_device_dtype(mat1, mat2)
-        and should_pad_bench(mat1, mat2, torch.ops.aten.mm)
-    ):
-        m_padded_length = get_padded_length(mat1.shape[0])
-        k_padded_length = get_padded_length(mat1.shape[1])
-        n_padded_length = get_padded_length(mat2.shape[1])
-
-        if k_padded_length != 0:
-            mat1 = pad_dim(mat1, k_padded_length, 1)
-            mat2 = pad_dim(mat2, k_padded_length, 0)
-            return torch.ops.aten.mm(mat1, mat2)
-        elif m_padded_length != 0:
-            mat1 = pad_dim(mat1, m_padded_length, 0)
-            return torch.ops.aten.mm(mat1, mat2)[:-m_padded_length, :]
-        elif n_padded_length != 0:
-            mat2 = pad_dim(mat2, n_padded_length, 1)
-            return torch.ops.aten.mm(mat1, mat2)[:, :-n_padded_length]
-
-    return NotImplemented  # go directly to lowering
-
-
-@register_decomposition([aten.bmm])
-def bmm_decomp(mat1, mat2):
-    if (
-        config.shape_padding
-        and check_device_dtype(mat1, mat2)
-        and should_pad_bench(mat1, mat2, torch.ops.aten.bmm)
-    ):
-        m_padded_length = get_padded_length(mat1.shape[1])
-        k_padded_length = get_padded_length(mat1.shape[2])
-        n_padded_length = get_padded_length(mat2.shape[2])
-
-        if k_padded_length != 0:
-            mat1 = pad_dim(mat1, k_padded_length, 2)
-            mat2 = pad_dim(mat2, k_padded_length, 1)
-            return torch.ops.aten.bmm(mat1, mat2)
-        elif m_padded_length != 0:
-            mat1 = pad_dim(mat1, m_padded_length, 1)
-            return torch.ops.aten.bmm(mat1, mat2)[:, :-m_padded_length, :].contiguous()
-        elif n_padded_length != 0:
-            mat2 = pad_dim(mat2, n_padded_length, 2)
-            return torch.ops.aten.bmm(mat1, mat2)[:, :, :-n_padded_length].contiguous()
-
-    return NotImplemented  # go directly to lowering
+# Not really sure how to put this into the main library.  PrimTorch wants
+# empty_permuted to go to the prim, and typically users don't really want
+# to decompose to empty_strided (but inductor is OK with it, because we are
+# cool with strides and everything goes to empty_strided)
+@register_decomposition([aten.empty_permuted.default])
+def empty_permuted(size, physical_layout, **kwargs):
+    perm = [0] * len(size)
+    for p, l in enumerate(physical_layout):
+        perm[l] = p
+    return torch.empty([size[l] for l in physical_layout], **kwargs).permute(perm)
 
 
 @register_decomposition([aten.convolution_backward])
@@ -350,11 +180,6 @@ def convolution_backward(
     return (grad_inp, grad_weight, grad_bias)
 
 
-@register_decomposition([aten.rsqrt])
-def rsqrt(x):
-    return torch.reciprocal(torch.sqrt(x))
-
-
 @register_decomposition([aten.log2])
 def log2(x):
     return torch.log(x) * (1.0 / math.log(2.0))
@@ -366,94 +191,136 @@ def round_dec(x, decimals=0):
     return aten.round(x * ten_pow_decimals) * (1.0 / ten_pow_decimals)
 
 
-@register_decomposition([aten.rsub.Tensor, aten.rsub.Scalar])
-def rsub(a, b):
-    if isinstance(b, numbers.Number):
-        b = torch.tensor(b, dtype=a.dtype, device=a.device)
-    return b - a
+@register_decomposition([aten.bmm])
+@pw_cast_for_opmath
+def bmm(self, batch2):
+    if config.coordinate_descent_tuning:
+        if self.shape[1] == 1 or batch2.shape[2] == 1:
+            out = (self.unsqueeze(-1) * batch2.unsqueeze(1)).sum(dim=2)
+            return out
+    if self.device.type == "cpu":
+        if self.size(1) == 1 and batch2.size(-1) == 1:
+            return torch.sum(
+                self.squeeze(1) * batch2.squeeze(-1), dim=1, keepdim=True
+            ).unsqueeze(1)
+    return NotImplemented
 
 
-@register_decomposition([aten.masked_fill])
-def masked_fill(value, mask, other):
-    if isinstance(other, numbers.Number):
-        other = torch.tensor(other, dtype=value.dtype, device=value.device)
-    assert other.numel() == 1 and other.ndim == 0
-    if other.device != value.device and other.numel() == 1:
-        other = other.to(value.device)
-    if other.dtype != value.dtype:
-        # TODO: error out on improper complex conversions
-        other = other.to(value.dtype)
-    return torch.where(mask, other, value)
+@register_decomposition([aten.addmm])
+@pw_cast_for_opmath
+def addmm(self, mat1, mat2, beta=1, alpha=1):
+    if self.device.type == "cpu":
+        if mat1.size(0) == 1 and mat2.size(-1) == 1:
+            out = torch.sum(
+                mat1.squeeze(0) * mat2.squeeze(-1), dim=0, keepdim=True
+            ).unsqueeze(0)
+            return alpha * out + beta * self
+        if mat1.size(0) == 1 and mat2.size(0) <= 16 and mat2.size(1) <= 16:
+            out = (mat1.T * mat2).sum(dim=0, keepdim=True)
+            return alpha * out + beta * self
+    return NotImplemented
 
 
-@register_decomposition([aten.nan_to_num])
-def nan_to_num(x, nan=0.0, posinf=None, neginf=None):
-    if is_boolean_dtype(x.dtype) or is_integer_dtype(x.dtype):
-        return x
-
-    if nan is None:
-        nan = 0.0
-    if posinf is None:
-        posinf = torch.finfo(x.dtype).max
-    if neginf is None:
-        neginf = torch.finfo(x.dtype).min
-    nan, posinf, neginf = (
-        torch.tensor(v, dtype=x.dtype, device=x.device) for v in (nan, posinf, neginf)
+@register_decomposition([aten.mm])
+@pw_cast_for_opmath
+def mm(self, input2):
+    from torch.fx.experimental.symbolic_shapes import (
+        definitely_true,
+        guard_size_oblivious,
     )
-    x = torch.where(x != x, nan, x)
-    x = torch.where(x == float("inf"), posinf, x)
-    x = torch.where(x == float("-inf"), neginf, x)
-    return x
+
+    # Our matrix vector multiplies only achieve peak bandwidth with coordinate descent tuning.
+    # todo: Look into why and fix it (hopefully)
+    if config.coordinate_descent_tuning:
+        if self.shape[0] == 1 or input2.shape[1] == 1:
+            return (self.unsqueeze(2) * input2.unsqueeze(0)).sum(dim=1)
+    if self.device.type == "cpu":
+        if (
+            guard_size_oblivious(self.size(-1) == 1)
+            and guard_size_oblivious(self.size(0) > 0)
+            and guard_size_oblivious(input2.size(0) == 1)
+            and (self.dtype == input2.dtype)
+            and definitely_true((torch.numel(self) + torch.numel(input2)) <= 32)
+        ):
+            return torch.cat([self[i, :] * input2 for i in range(self.size(0))])
+        if guard_size_oblivious(self.size(0) == 1) and guard_size_oblivious(
+            input2.size(-1) == 1
+        ):
+            return torch.sum(
+                self.squeeze(0) * input2.squeeze(-1), dim=0, keepdim=True
+            ).unsqueeze(0)
+    return NotImplemented
 
 
-@register_decomposition([aten.all.default])
-def all(input):
-    return torch.logical_not(torch.any(torch.logical_not(input)))
+# This pass does two things:
+# - Eliminate cat when there is only one tensor input
+# - Normalize cat calls, so that legacy empty 1-D tensors are removed (NB: we
+#   don't remove ALL empty tensors, only the naughty ones)
+@register_decomposition([aten.cat.default])
+def cat(tensors, dim=0):
+    from torch.fx.experimental.symbolic_shapes import guard_size_oblivious
+
+    def non_empty_tensor(x):
+        # For better or worse, this is a valid cat:
+        #
+        #   torch.cat([torch.randn(2, 2, 4), torch.randn(0), torch.randn(3, 2, 4)])
+        #
+        # We'd like to eliminate naughtiness like this for downstream passes
+        # like split_cat.  The easiest way is to just drop such inputs
+        # (guarding that they are non-zero).
+        #
+        # Is it permissible for this filtering to be size-oblivious?  A case
+        # where this could matter is cat([(2, 2), (u0,)], dim=0); if u0
+        # happened to be zero, we would have liked to have filtered it out.
+        # But actually, the ONLY way this could have passed is if u0 == 0,
+        # so by the time we get here we have already installed a deferred
+        # runtime assert forcing u0 to be zero.  So if this hasn't happened,
+        # we know that the unbacked SymInt has appropriate size and there are
+        # no problems.
+        return len(x.shape) != 1 or guard_size_oblivious(x.shape[0] > 0)
+
+    filtered_tensors = list(filter(non_empty_tensor, tensors))
+
+    if len(filtered_tensors) == 1:
+        return filtered_tensors[0].clone()
+    elif 1 < len(filtered_tensors) < len(tensors):
+        # on the first call, when we remove empty tensors, we redispatch recursively
+        return aten.cat.default(filtered_tensors, dim)
+    # when no 'filtering' has occurred, we raise to prevent infinite recursion (no more decomposition needed)
+    return NotImplemented
 
 
-@register_decomposition([aten.all.dim])
-def all_dim(input, dim, keeepdim=False):
-    return torch.logical_not(torch.any(torch.logical_not(input), dim, keeepdim))
+@register_decomposition([aten.angle])
+def angle(x):
+    if x.is_complex():
+        return torch.where(
+            torch.isnan(x.real), float("nan"), torch.atan2(x.imag, x.real)
+        )
+
+    # when x is real number
+    #   if x >= 0, return 0
+    #   if x < 0, return pi
+    #   if x is nan, return nan
+    _, dtype = elementwise_dtypes(
+        x,
+        type_promotion_kind=ELEMENTWISE_TYPE_PROMOTION_KIND.INT_TO_FLOAT,
+    )
+    pi = torch.scalar_tensor(math.pi, dtype=dtype, device=x.device)
+    ret = torch.where(x < 0, pi, 0.0)
+    return torch.where(torch.isnan(x), float("nan"), ret)
 
 
-@register_decomposition(aten.hardswish_)
-def hardswish_(x):
-    return x.copy_(aten.hardswish(x))
-
-
-@register_decomposition(aten.hardtanh_)
-def hardtanh_(x, min_val=-1, max_val=1):
-    return x.copy_(aten.hardtanh(x, min_val, max_val))
-
-
-@register_decomposition(aten.leaky_relu_)
-def leaky_relu_(x, negative_slope=0.01):
-    return x.copy_(aten.leaky_relu(x, negative_slope))
-
-
-@register_decomposition(aten.silu_)
-def silu_(x):
-    return x.copy_(aten.silu(x))
-
-
-@register_decomposition(aten.masked_fill_)
-def masked_fill_(x, mask, value):
-    return x.copy_(aten.masked_fill(x, mask, value))
-
-
-@register_decomposition([aten.log1p])
-def log1p(x):
-    return torch.log(x + 1)
-
-
-@register_decomposition([aten.baddbmm])
-def baddbmm(self, batch1, batch2, beta=1, alpha=1):
-    result = torch.bmm(batch1, batch2)
-    if not isinstance(alpha, numbers.Number) or alpha != 1:
-        result = result * alpha
-    if not isinstance(beta, numbers.Number) or beta != 1:
-        self = self * beta
-    return self + result
+@register_decomposition([aten.add])
+def add(x, y, *, alpha=None):
+    x_is_complex_tensor = torch.is_tensor(x) and x.is_complex()
+    y_is_complex_tensor = torch.is_tensor(y) and y.is_complex()
+    if not x_is_complex_tensor or not y_is_complex_tensor:
+        return NotImplemented
+    z = y
+    if alpha is not None:
+        z = alpha * y
+    complex_type = torch.promote_types(x.dtype, y.dtype)
+    return (x.view(x.real.dtype) + z.view(y.real.dtype)).view(complex_type)
 
 
 @register_decomposition([aten.conj_physical])
@@ -467,43 +334,302 @@ def lift(self):
     return self
 
 
-@register_decomposition([aten.fill.Scalar])
-def fill_scalar(self, value):
-    return torch.full_like(self, value)
-
-
-@register_decomposition([aten.fill.Tensor])
-def fill_tensor(self, value: Tensor):
-    assert value.dim() == 0, "aten.fill.Tensor only supports 0-dimension value tensor"
-    return torch.full_like(self, value.item())
-
-
 @register_decomposition([aten.bernoulli.default])
 def bernoulli(self, *, generator=None):
     assert generator is None
-    return torch.rand_like(self, dtype=torch.float32) < self
+    return (torch.rand_like(self, dtype=torch.float32) < self).to(self.dtype)
 
 
-@register_decomposition([aten.bernoulli.p])
-def bernoulli_p(self, p=0.5, *, generator=None):
-    assert generator is None
-    return torch.rand_like(self, dtype=torch.float32) < p
+@register_decomposition([aten.fmin, prims.fmin])
+def fmin(self, other):
+    return torch.where(torch.isnan(other) | (other > self), self, other)
 
 
-"""
-Some decomps result in differences from eager related to randomness.
-We put these decomps in a separate table `extra_random_decomps` to allow
-turning them on and off via `config.fallback_random`.
-"""
-extra_random_decomps = get_decompositions([aten.native_dropout])
-register_extra_random_decomp = functools.partial(
-    decomp.register_decomposition, registry=extra_random_decomps
-)
+@register_decomposition([aten.fmax, prims.fmax])
+def fmax(self, other):
+    return torch.where(torch.isnan(other) | (other < self), self, other)
 
 
-@register_extra_random_decomp([aten.bernoulli_])
-def bernoulli_(self, p=0.5):
-    return self.copy_(torch.rand_like(self, dtype=torch.float32) < p)
+@register_decomposition(aten.amax)
+def amax(self, dim=None, keepdim=False):
+    if self.dtype == torch.bool:
+        return torch.any(self, dim=dim, keepdim=keepdim)
+    return NotImplemented
+
+
+@register_decomposition(aten.amin)
+def amin(self, dim=None, keepdim=False):
+    if self.dtype == torch.bool:
+        return torch.all(self, dim=dim, keepdim=keepdim)
+    return NotImplemented
+
+
+@register_decomposition([aten.narrow_copy])
+def narrow_copy(self, dim, start, length):
+    return torch.narrow(self, dim, start, length).clone()
+
+
+@register_decomposition([aten.expand_copy])
+def expand_copy(self, size, *, implicit=False):
+    return aten.expand(self, size, implicit=implicit).clone()
+
+
+@register_decomposition([aten.view_copy.default])
+def view_copy_default(self, size):
+    return aten.view(self, size).clone()
+
+
+@register_decomposition([aten.view_copy.dtype])
+def view_copy_dtype(self, dtype):
+    return self.to(dtype).clone()
+
+
+def get_like_layout(
+    tensor: torch.Tensor, memory_format: Optional[torch.memory_format]
+) -> torch.memory_format:
+    # TODO: _to_copy tensor to stride permutation
+    if memory_format is torch.preserve_format or memory_format is None:
+        return utils.suggest_memory_format(tensor)
+    else:
+        return memory_format
+
+
+@register_decomposition(aten.rand_like)
+def rand_like(self, *, dtype=None, device=None, memory_format=None, **kwargs):
+    return torch.rand(
+        [*self.size()],
+        dtype=dtype or self.dtype,
+        device=device or self.device,
+        **kwargs,
+    ).to(memory_format=get_like_layout(self, memory_format))
+
+
+@register_decomposition(aten.randn_like)
+def randn_like(self, *, dtype=None, device=None, memory_format=None, **kwargs):
+    return torch.randn(
+        [*self.size()],
+        dtype=dtype or self.dtype,
+        device=device or self.device,
+        **kwargs,
+    ).to(memory_format=get_like_layout(self, memory_format))
+
+
+@register_decomposition(aten.full_like)
+def full_like(
+    self,
+    fill_value,
+    *,
+    dtype=None,
+    layout=None,
+    device=None,
+    pin_memory=False,
+    requires_grad=False,
+    memory_format=torch.preserve_format,
+):
+    return torch.full(
+        [*self.size()],
+        fill_value,
+        dtype=dtype or self.dtype,
+        layout=layout or self.layout,
+        device=device or self.device,
+        requires_grad=requires_grad,
+    ).to(memory_format=get_like_layout(self, memory_format))
+
+
+@register_decomposition(aten.randint_like.default)
+def randint_like(self, high, *, dtype=None, device=None, memory_format=None, **kwargs):
+    return aten.randint.low(
+        0,
+        high,
+        [*self.size()],
+        dtype=dtype or self.dtype,
+        device=device or self.device,
+        **kwargs,
+    ).to(memory_format=get_like_layout(self, memory_format))
+
+
+@register_decomposition(aten.randint_like.low_dtype)
+def randint_like_low(
+    self, low, high, *, dtype=None, device=None, memory_format=None, **kwargs
+):
+    return aten.randint.low(
+        low,
+        high,
+        [*self.size()],
+        dtype=dtype or self.dtype,
+        device=device or self.device,
+        **kwargs,
+    ).to(memory_format=get_like_layout(self, memory_format))
+
+
+@register_decomposition(aten.randint.default)
+def randint(high, size, **kwargs):
+    return aten.randint.low(0, high, size, **kwargs)
+
+
+# The difference between quantize_per_tensor.default and quantize_per_tensor.tensor is
+# scale and zero_point is scalar or scalar tensor
+@register_decomposition(quantized_decomposed.quantize_per_tensor.default)
+def quantize_per_tensor_default_decomp_impl(
+    input: torch.Tensor,
+    scale: float,
+    zero_point: int,
+    quant_min: int,
+    quant_max: int,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    if input.dtype == torch.bfloat16:
+        input = input.to(torch.float32)
+    inv_scale = 1.0 / scale
+    return torch.clamp(
+        torch.round(input * inv_scale) + zero_point, quant_min, quant_max
+    ).to(dtype)
+
+
+# The difference between dequantize_per_tensor.default and dequantize_per_tensor.tensor is
+# scale and zero_point is scalar or scalar tensor
+@register_decomposition(quantized_decomposed.dequantize_per_tensor.default)
+def dequantize_per_tensor_default_decomp_impl(
+    input: torch.Tensor,
+    scale: float,
+    zero_point: int,
+    quant_min: int,
+    quant_max: int,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    return (input.to(torch.float32) - zero_point) * scale
+
+
+@register_decomposition(quantized_decomposed.quantize_per_tensor.tensor)
+def quantize_per_tensor_tensor_decomp_impl(
+    input: torch.Tensor,
+    scale: torch.Tensor,
+    zero_point: torch.Tensor,
+    quant_min: int,
+    quant_max: int,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    if input.dtype == torch.bfloat16:
+        input = input.to(torch.float32)
+    inv_scale = 1.0 / scale
+    return torch.clamp(
+        torch.round(input * inv_scale) + zero_point, quant_min, quant_max
+    ).to(dtype)
+
+
+@register_decomposition(quantized_decomposed.dequantize_per_tensor.tensor)
+def dequantize_per_tensor_tensor_decomp_impl(
+    input: torch.Tensor,
+    scale: torch.Tensor,
+    zero_point: torch.Tensor,
+    quant_min: int,
+    quant_max: int,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    return (input.to(torch.float32) - zero_point.to(torch.int32)) * scale.to(
+        torch.float32
+    )
+
+
+@register_decomposition(torch.ops.quantized.embedding_bag_byte_unpack)
+def q_embedding_bag_byte_unpack_decomp(packed):
+    def bitcast_u8_to_f32(u8):
+        x, y, z, w = (u8[..., n].to(torch.int32) for n in (0, 1, 2, 3))
+        if sys.byteorder == "little":
+            return (x + (y << 8) + (z << 16) + (w << 24)).view(torch.float32)[..., None]
+        else:
+            return ((x << 24) + (y << 16) + (z << 8) + w).view(torch.float32)[..., None]
+
+    scales = bitcast_u8_to_f32(packed[..., -8:-4])
+    offsets = bitcast_u8_to_f32(packed[..., -4:])
+    return packed[..., :-8].to(torch.float32) * scales + offsets
+
+
+@register_decomposition([aten.grid_sampler_2d])
+@pw_cast_for_opmath
+def grid_sampler_2d(
+    a: torch.Tensor,
+    grid: torch.Tensor,
+    interpolation_mode: int = 0,
+    padding_mode: int = 0,
+    align_corners: bool = False,
+) -> torch.Tensor:
+    # We do not expand the grid (_expand_grid=False) on cpu for performance reasons
+    # Experimenting locally it was found that compiled CUDA code is accelerated by ~5x
+    # and CPU code by ~2x on bicubic mode, if we expand the grid from (N, H, W, 2) into (N, C, H, W, 2)
+    # However, this leads to a slowdown around ~0.8x on CPU bilinear mode, channels first.
+    # Thus we apply this hack to not expand the grid for this case.
+    _expand_grid = not (
+        a.device == torch.device("cpu")
+        and interpolation_mode == 0
+        and a.is_contiguous(memory_format=torch.contiguous_format)
+    )
+
+    output = decomp_grid_sampler_2d(
+        a,
+        grid=grid,
+        interpolation_mode=interpolation_mode,
+        padding_mode=padding_mode,
+        align_corners=align_corners,
+        _expand_grid=_expand_grid,
+    )
+    return output
+
+
+@register_decomposition(aten._foreach_addcmul.Scalar)
+def _foreach_addcmul_scalar(self, left_tensors, right_tensors, scalar=1):
+    return aten._foreach_add.List(
+        self, aten._foreach_mul.List(left_tensors, right_tensors), alpha=scalar
+    )
+
+
+@register_decomposition(aten._foreach_addcdiv.Scalar)
+def _foreach_addcdiv_scalar(self, left_tensors, right_tensors, scalar=1):
+    return aten._foreach_add.List(
+        self, aten._foreach_div.List(left_tensors, right_tensors), alpha=scalar
+    )
+
+
+@register_decomposition(aten._foreach_lerp.Scalar)
+def _foreach_lerp_scalar(start_tensors, end_tensors, weight):
+    return aten._foreach_add.List(
+        start_tensors,
+        aten._foreach_mul.Scalar(
+            aten._foreach_sub.List(end_tensors, start_tensors), weight
+        ),
+    )
+
+
+@aten.miopen_batch_norm.default.py_impl(torch._C.DispatchKey.Autograd)
+@register_decomposition(aten.miopen_batch_norm)
+def miopen_batch_norm(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: typing.Optional[torch.Tensor],
+    running_mean: typing.Optional[torch.Tensor],
+    running_var: typing.Optional[torch.Tensor],
+    training: bool,
+    exponential_average_factor: float,
+    epsilon: float,
+):
+    a, b, c = aten.native_batch_norm(
+        input,
+        weight,
+        bias,
+        running_mean,
+        running_var,
+        training,
+        exponential_average_factor,
+        epsilon,
+    )
+
+    if training:
+        return (a, b, c)
+    return (
+        a,
+        weight.new_zeros((0,)),
+        weight.new_zeros((0,)),
+    )
 
 
 @functools.lru_cache(None)
@@ -516,3 +642,41 @@ def select_decomp_table():
     if config.fallback_random:
         return decompositions
     return fast_random_decomps()
+
+
+@register_decomposition(aten.masked_scatter)
+def masked_scatter(self, mask, source):
+    if self.device.type == "cuda":
+        # This two-step algorithm is the same as eager CUDA, for eager CPU we
+        # use a 1-shot serial iteration.
+        self, mask = aten.broadcast_tensors([self, mask])
+        source_idx = mask.reshape(-1).cumsum(0) - 1
+        return inductor_prims.masked_scatter_with_index(self, mask, source_idx, source)
+    return NotImplemented
+
+
+@register_decomposition(quantized_decomposed.choose_qparams.tensor)
+def choose_qparams_tensor(
+    input: torch.Tensor, quant_min: int, quant_max: int, eps: float, dtype: torch.dtype
+):
+    min_val, max_val = torch.aminmax(input)
+    scale = (max_val - min_val) / float(quant_max - quant_min)
+    scale = torch.max(scale, torch.Tensor([eps]))
+    zero_point = quant_min - torch.round(min_val / scale).to(torch.int)
+    zero_point = torch.clamp(zero_point, quant_min, quant_max)
+    return scale.to(torch.float64), zero_point.to(torch.int64)
+
+
+@register_decomposition(aten.put)
+def put(self, index, source, accumulate=False):
+    flattened = self.flatten()
+    flattened = torch.index_put(
+        flattened, [index], source.reshape(index.shape), accumulate
+    )
+    return flattened.reshape(self.shape)
+
+
+@register_decomposition(aten.put_)
+def put_(self, index, source, accumulate=False):
+    out = aten.put(self, index, source, accumulate=accumulate)
+    return self.copy_(out)

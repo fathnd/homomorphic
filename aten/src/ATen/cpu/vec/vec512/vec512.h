@@ -14,12 +14,11 @@
 #include <ATen/cpu/vec/vec512/vec512_complex_float.h>
 #include <ATen/cpu/vec/vec512/vec512_complex_double.h>
 
-
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <iostream>
+#include <ostream>
 
 namespace at {
 namespace vec {
@@ -56,7 +55,7 @@ std::ostream& operator<<(std::ostream& stream, const Vectorized<T>& vec) {
 }
 
 
-#if defined(CPU_CAPABILITY_AVX512) && !defined(_MSC_VER)
+#if defined(CPU_CAPABILITY_AVX512)
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ CAST (AVX512) ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -70,8 +69,19 @@ inline Vectorized<double> cast<double, float>(const Vectorized<float>& src) {
   return _mm512_castps_pd(src);
 }
 
-// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ GATHER ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+template<>
+inline Vectorized<float> cast<float, int32_t>(const Vectorized<int32_t>& src) {
+  return _mm512_castsi512_ps(src);
+}
 
+template<>
+inline Vectorized<double> cast<double, int64_t>(const Vectorized<int64_t>& src) {
+  return _mm512_castsi512_pd(src);
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ GATHER ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#ifndef _MSC_VER
+// MSVC is not working well on complex function overload.
 template<int64_t scale = 1>
 std::enable_if_t<scale == 1 || scale == 2 || scale == 4 || scale == 8, Vectorized<double>>
 inline gather(const double* base_addr, const Vectorized<int64_t>& vindex) {
@@ -83,13 +93,14 @@ std::enable_if_t<scale == 1 || scale == 2 || scale == 4 || scale == 8, Vectorize
 inline gather(const float* base_addr, const Vectorized<int32_t>& vindex) {
   return _mm512_i32gather_ps(vindex, base_addr, scale);
 }
-
+#endif
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ MASK GATHER ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
+#ifndef _MSC_VER
+// MSVC is not working well on complex function overload.
 template<int64_t scale = 1>
 std::enable_if_t<scale == 1 || scale == 2 || scale == 4 || scale == 8, Vectorized<double>>
 inline mask_gather(const Vectorized<double>& src, const double* base_addr,
-                   const Vectorized<int64_t>& vindex, const Vectorized<double>& mask) {
+                   const Vectorized<int64_t>& vindex, Vectorized<double>& mask) {
   auto all_ones = _mm512_castsi512_pd(_mm512_set1_epi64(0xFFFFFFFFFFFFFFFF));
   auto mask_ = _mm512_cmp_pd_mask(all_ones, mask.values, _CMP_EQ_OQ);
   return _mm512_mask_i64gather_pd(src, mask_, vindex, base_addr, scale);
@@ -98,12 +109,12 @@ inline mask_gather(const Vectorized<double>& src, const double* base_addr,
 template<int64_t scale = 1>
 std::enable_if_t<scale == 1 || scale == 2 || scale == 4 || scale == 8, Vectorized<float>>
 inline mask_gather(const Vectorized<float>& src, const float* base_addr,
-                   const Vectorized<int32_t>& vindex, const Vectorized<float>& mask) {
+                   const Vectorized<int32_t>& vindex, Vectorized<float>& mask) {
   auto all_ones = _mm512_castsi512_ps(_mm512_set1_epi32(0xFFFFFFFF));
   auto mask_ = _mm512_cmp_ps_mask(all_ones, mask.values, _CMP_EQ_OQ);
   return _mm512_mask_i32gather_ps(src, mask_, vindex, base_addr, scale);
 }
-
+#endif
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ CONVERT ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 template<>
@@ -116,6 +127,18 @@ template<>
 Vectorized<int32_t>
 inline convert_to_int_of_same_size<float>(const Vectorized<float> &src) {
   return _mm512_cvttps_epi32(src);
+}
+
+template<>
+Vectorized<double>
+inline convert_to_fp_of_same_size<double>(const Vectorized<int64_t> &src) {
+  return _mm512_cvtepi64_pd(src);
+}
+
+template<>
+Vectorized<float>
+inline convert_to_fp_of_same_size<float>(const Vectorized<int32_t> &src) {
+  return _mm512_cvtepi32_ps(src);
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ INTERLEAVE ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -227,8 +250,7 @@ inline Vectorized<int16_t> flip(const Vectorized<int16_t> & v) {
   return _mm512_permutexvar_epi16(mask, v);
 }
 
-template<>
-inline Vectorized<int8_t> flip(const Vectorized<int8_t> & v) {
+inline __m512i flip8(const __m512i & v) {
   const __m512i mask1 = _mm512_set_epi8(
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
@@ -240,6 +262,16 @@ inline Vectorized<int8_t> flip(const Vectorized<int8_t> & v) {
   return _mm512_permutexvar_epi64(mask2, reversed_vec);
 }
 
-#endif // defined(CPU_CAPABILITY_AVX512) && !defined(_MSC_VER)
+template<>
+inline Vectorized<int8_t> flip(const Vectorized<int8_t> & v) {
+  return flip8(v);
+}
+
+template<>
+inline Vectorized<uint8_t> flip(const Vectorized<uint8_t> & v) {
+  return flip8(v);
+}
+
+#endif // defined(CPU_CAPABILITY_AVX512)
 
 }}}

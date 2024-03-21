@@ -66,6 +66,13 @@ class PrepareCustomConfig:
         self.output_quantized_indexes: List[int] = []
         self.preserved_attributes: List[str] = []
 
+    def __repr__(self):
+        dict_nonempty = {
+            k: v for k, v in self.__dict__.items()
+            if len(v) > 0
+        }
+        return f"PrepareCustomConfig({dict_nonempty})"
+
     def set_standalone_module_name(
             self,
             module_name: str,
@@ -190,8 +197,7 @@ class PrepareCustomConfig:
                 return obj
             if isinstance(obj, Dict):
                 return QConfigMapping.from_dict(obj)
-            raise ValueError("Expected QConfigMapping in prepare_custom_config_dict[\"%s\"], got '%s'" %
-                             (dict_key, type(obj)))
+            raise ValueError(f"Expected QConfigMapping in prepare_custom_config_dict[\"{dict_key}\"], got '{type(obj)}'")
 
         def _get_prepare_custom_config(obj: Any, dict_key: str) -> Optional[PrepareCustomConfig]:
             """
@@ -201,8 +207,7 @@ class PrepareCustomConfig:
                 return obj
             if isinstance(obj, Dict):
                 return PrepareCustomConfig.from_dict(obj)
-            raise ValueError("Expected PrepareCustomConfig in prepare_custom_config_dict[\"%s\"], got '%s'" %
-                             (dict_key, type(obj)))
+            raise ValueError(f"Expected PrepareCustomConfig in prepare_custom_config_dict[\"{dict_key}\"], got '{type(obj)}'")
 
         def _get_backend_config(obj: Any, dict_key: str) -> Optional[BackendConfig]:
             """
@@ -212,8 +217,7 @@ class PrepareCustomConfig:
                 return obj
             if isinstance(obj, Dict):
                 return BackendConfig.from_dict(obj)
-            raise ValueError("Expected BackendConfig in prepare_custom_config_dict[\"%s\"], got '%s'" %
-                             (dict_key, type(obj)))
+            raise ValueError(f"Expected BackendConfig in prepare_custom_config_dict[\"{dict_key}\"], got '{type(obj)}'")
 
         conf = cls()
         for (module_name, qconfig_dict, example_inputs, _prepare_custom_config_dict, backend_config_dict) in\
@@ -292,6 +296,13 @@ class ConvertCustomConfig:
         self.observed_to_quantized_mapping: Dict[QuantType, Dict[Type, Type]] = {}
         self.preserved_attributes: List[str] = []
 
+    def __repr__(self):
+        dict_nonempty = {
+            k: v for k, v in self.__dict__.items()
+            if len(v) > 0
+        }
+        return f"ConvertCustomConfig({dict_nonempty})"
+
     def set_observed_to_quantized_mapping(
             self,
             observed_class: Type,
@@ -367,6 +378,13 @@ class FuseCustomConfig:
 
     def __init__(self):
         self.preserved_attributes: List[str] = []
+
+    def __repr__(self):
+        dict_nonempty = {
+            k: v for k, v in self.__dict__.items()
+            if len(v) > 0
+        }
+        return f"FuseCustomConfig({dict_nonempty})"
 
     def set_preserved_attributes(self, attributes: List[str]) -> FuseCustomConfig:
         """

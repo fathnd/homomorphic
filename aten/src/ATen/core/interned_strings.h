@@ -1,9 +1,4 @@
 #pragma once
-#include <vector>
-#include <cstdint>
-#include <string>
-#include <unordered_map>
-#include <algorithm>
 
 #include <c10/macros/Macros.h>
 
@@ -163,7 +158,11 @@ namespace c10 {
   _(aten, is_scripting)              \
   _(aten, _unwrap_optional)          \
   _(prim, fork)                      \
+  _(prim, awaitable)                 \
   _(prim, forkClosure)               \
+  _(prim, awaitableClosure)          \
+  _(prim, awaitable_nowait)          \
+  _(prim, awaitable_wait)            \
   _(prim, RaiseException)            \
   _(prim, Closure)                   \
   _(prim, CreateObject)              \
@@ -227,6 +226,7 @@ namespace c10 {
   _(aten, has_torch_function)        \
   _(aten, is_autocast_enabled)       \
   _(aten, is_autocast_cpu_enabled)   \
+  _(aten, is_autocast_xla_enabled)   \
   FORALL_ATEN_BASE_SYMBOLS(_)        \
   _(onnx, Add)                       \
   _(onnx, Concat)                    \
@@ -335,7 +335,8 @@ namespace c10 {
   _(attr, output_layouts)            \
   _(attr, allowzero)                 \
   _(attr, seen_none)                 \
-  _(attr, overload_name)
+  _(attr, overload_name)             \
+  _(attr, node_stack_idx)
 
 enum class _keys : unique_t {
     #define DEFINE_KEY(ns, s) ns##_##s,

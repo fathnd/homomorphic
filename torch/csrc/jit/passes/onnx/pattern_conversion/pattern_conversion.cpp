@@ -7,6 +7,8 @@
 
 #include <ATen/ScalarOps.h>
 
+#include <iostream>
+
 // EDITING THIS FILE? READ THIS FIRST!
 // see Note [Edit Pattern Conversion] in pattern_conversion.h
 
@@ -298,7 +300,7 @@ std::vector<Value*> ConvertIndexPutToONNX(
   // select operator(0).
   std::vector<Node*> slice_and_select_nodes =
       IndexingPatternFinder::FetchSliceAndSelect(index_put_node);
-  Node* last_node = slice_and_select_nodes.size() > 0
+  Node* last_node = !slice_and_select_nodes.empty()
       ? slice_and_select_nodes.back()
       : index_put_node;
   // Update inner block input originates from outside.

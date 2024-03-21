@@ -1,7 +1,5 @@
 #pragma once
 
-#include <stack>
-
 #include <c10/core/InferenceMode.h>
 #include <c10/core/impl/LocalDispatchKeySet.h>
 #include <c10/util/Exception.h>
@@ -10,6 +8,7 @@
 #include <ATen/FuncTorchTLS.h>
 #include <ATen/PythonTorchFunctionTLS.h>
 #include <ATen/SavedTensorHooks.h>
+#include <ATen/ThreadLocalPythonObjects.h>
 #include <ATen/record_function.h>
 #include <c10/core/impl/PythonDispatcherTLS.h>
 #include <c10/core/impl/TorchDispatchModeTLS.h>
@@ -76,6 +75,9 @@ class TORCH_API ThreadLocalState {
 
   bool functionalization_reapply_views_state_;
 
+  // TLS for arbitrary python objects that is registered via hooks
+  at::impl::ThreadLocalPythonObjects saved_objects_;
+
   friend class ThreadLocalStateGuard;
 };
 
@@ -94,6 +96,7 @@ class TORCH_API ThreadLocalStateGuard {
   }
 
  private:
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-const-or-ref-data-members)
   const ThreadLocalState prev_state_;
 };
 

@@ -17,6 +17,7 @@
 #include <ATen/ops/atleast_2d_native.h>
 #include <ATen/ops/atleast_3d_native.h>
 #include <ATen/ops/cat.h>
+#include <ATen/ops/chalf_native.h>
 #include <ATen/ops/empty_like.h>
 #include <ATen/ops/flip_native.h>
 #include <ATen/ops/fliplr_native.h>
@@ -27,10 +28,10 @@
 #endif
 
 #include <algorithm>
+#include <utility>
 #include <vector>
 
-namespace at {
-namespace native {
+namespace at::native {
 
 Tensor flip(const Tensor& self, IntArrayRef dims) {
   const int64_t total_dims = self.dim();
@@ -62,8 +63,8 @@ Tensor flip(const Tensor& self, IntArrayRef dims) {
     .check_all_same_dtype(false)
     .declare_static_dtype_and_device(self.scalar_type(), self.device())
     .add_output(out_tensor)
-    .add_input(self)
-    .add_input(restrided_self)
+    .add_const_input(self)
+    .add_const_input(restrided_self)
     .build();
 
   auto* data = reinterpret_cast<char*>(iter.data_ptr(0));
@@ -98,7 +99,7 @@ Tensor flip(const Tensor& self, IntArrayRef dims) {
   return out_tensor;
 }
 
-Tensor roll_cpu(const Tensor& self, IntArrayRef shifts, IntArrayRef dims) {
+Tensor roll(const Tensor& self, IntArrayRef shifts, IntArrayRef dims) { // Used by CPU and MPS dispatch.
   if (dims.size() != 1 || shifts.size() != 1) {
     return roll_common(self, shifts, dims);
   }
@@ -116,7 +117,7 @@ Tensor roll_cpu(const Tensor& self, IntArrayRef shifts, IntArrayRef dims) {
   }
   auto t0 = self.narrow(dim, start, size-start);
   auto t1 = self.narrow(dim, 0, start);
-  return at::cat({t0, t1}, dim);
+  return at::cat({std::move(t0), std::move(t1)}, dim);
 }
 
 Tensor rot90(const Tensor& self, int64_t k, IntArrayRef dims) {
@@ -235,4 +236,4 @@ Tensor chalf(const Tensor& self, c10::optional<MemoryFormat> memory_format) {
 
 DEFINE_DISPATCH(flip_stub);
 
-}} // namespace at::native
+} // namespace at::native

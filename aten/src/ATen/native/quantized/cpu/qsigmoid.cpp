@@ -18,6 +18,7 @@
 #endif
 
 #include <algorithm>
+#include <utility>
 
 namespace at {
 namespace native {
@@ -25,7 +26,7 @@ namespace native {
 DEFINE_DISPATCH(qsigmoid_stub);
 
 #ifdef USE_PYTORCH_QNNPACK
-Tensor qnnpack_sigmoid(
+static Tensor qnnpack_sigmoid(
     Tensor input, double output_scale, int64_t output_zero_point) {
   TORCH_CHECK(input.ndimension() > 0, "qnnpack_sigmoid(): Got empty input tensor");
   TORCH_CHECK(input.scalar_type() == c10::kQUInt8,
@@ -107,7 +108,7 @@ Tensor sigmoid_quantized_cpu(const Tensor& qx) {
 #endif  // USE_PYTORCH_QNNPACK
   Tensor qy;
   AT_DISPATCH_QINT_TYPES(qx.scalar_type(), "qsigmoid", [&]() {
-    // Naive implemenentation: uses dequantize/execute/quantize routine
+    // Naive implementation: uses dequantize/execute/quantize routine
     // - Output scale is set to 1.0 / 2^(BIT_NUM)
     // - For signed types output zero point is set to 0
     // - For unsigned types output zero point is set to (qmax + qmin) / 2.0
@@ -134,7 +135,7 @@ class QSigmoid final {
 #ifdef USE_PYTORCH_QNNPACK
   if (at::globalContext().qEngine() == at::QEngine::QNNPACK &&
       qx.scalar_type() == kQUInt8) {
-    return qnnpack_sigmoid(qx, output_scale, output_zero_point);
+    return qnnpack_sigmoid(std::move(qx), output_scale, output_zero_point);
   }
 #endif  // USE_PYTORCH_QNNPACK
   Tensor qy;

@@ -121,7 +121,7 @@ class TestQuantizeEagerOps(QuantizationTestCase):
         original_ref_m.conv.weight = torch.nn.Parameter(original_m.conv.weight.detach())
         original_ref_m.conv.bias = torch.nn.Parameter(original_m.conv.bias.detach())
 
-        original_m.qconfig = torch.quantization.default_qconfig
+        original_m.qconfig = torch.ao.quantization.default_qconfig
 
         m = prepare(original_m)
         # calibration
@@ -135,7 +135,7 @@ class TestQuantizeEagerOps(QuantizationTestCase):
 
         # quantize the reference model
         original_ref_m.eval()
-        original_ref_m.qconfig = torch.quantization.default_qconfig
+        original_ref_m.qconfig = torch.ao.quantization.default_qconfig
 
         ref_m = prepare(original_ref_m)
         ref_m(data)
@@ -327,6 +327,7 @@ class TestQuantizeEagerOps(QuantizationTestCase):
             self.assertEqual(type(model.myadd), torch.ao.nn.quantized.QFunctional)
             self.assertEqual(type(model.mycat), torch.ao.nn.quantized.QFunctional)
             self.assertEqual(type(model.myadd_relu), torch.ao.nn.quantized.QFunctional)
+            self.assertEqual(type(model.mymatmul), torch.ao.nn.quantized.QFunctional)
             self.checkNoQconfig(model)
 
         checkQuantized(model)
@@ -365,10 +366,10 @@ class TestQuantizeEagerPTQStatic(QuantizationTestCase):
                 # test one line API - out of place version
                 base = AnnotatedSingleLayerLinearModel(qengine)
                 base.qconfig = qconfig
-                keys_before = set(list(base.state_dict().keys()))
+                keys_before = set(base.state_dict().keys())
                 model = quantize(base, test_only_eval_fn, [self.calib_data])
                 checkQuantized(model)
-                keys_after = set(list(base.state_dict().keys()))
+                keys_after = set(base.state_dict().keys())
                 self.assertEqual(keys_before, keys_after)  # simple check that nothing changed
 
                 # in-place version
@@ -1067,6 +1068,21 @@ class TestQuantizeEagerPTQStatic(QuantizationTestCase):
         self.assertTrue(isinstance(m.softmax.activation_post_process, FixedQParamsObserver))
         self.assertTrue(isinstance(m.tanh.activation_post_process, FixedQParamsObserver))
 
+    @skipIfNoFBGEMM
+    def test_mha_batch_first_attr_is_copied_in_prepare(self):
+        class TransformerDecoderLayer(nn.Module):
+            def __init__(self, d_model, nhead, batch_first):
+                super().__init__()
+                self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=0.1, batch_first=batch_first)
+
+        qengine = torch.backends.quantized.engine
+        for batch_first in [True, False]:
+            model = TransformerDecoderLayer(512, 8, batch_first)
+            quantization_config = torch.ao.quantization.get_default_qconfig(qengine)
+            model.qconfig = quantization_config
+            prepared_model = torch.ao.quantization.prepare(model, inplace=False)
+            self.assertTrue(prepared_model.self_attn.batch_first == model.self_attn.batch_first)
+
 @skipIfNoFBGEMM
 class TestQuantizeEagerPTQDynamic(QuantizationTestCase):
     def test_single_layer(self):
@@ -1092,10 +1108,10 @@ class TestQuantizeEagerPTQDynamic(QuantizationTestCase):
 
             # test one line API - out of place version
             base = SingleLayerLinearDynamicModel()
-            keys_before = set(list(base.state_dict().keys()))
+            keys_before = set(base.state_dict().keys())
             model = quantize_dynamic(base, qconfig_dict)
             checkQuantized(model)
-            keys_after = set(list(base.state_dict().keys()))
+            keys_after = set(base.state_dict().keys())
             self.assertEqual(keys_before, keys_after)  # simple check that nothing changed
 
             # in-place version
@@ -1105,7 +1121,7 @@ class TestQuantizeEagerPTQDynamic(QuantizationTestCase):
 
             # Test set qconfig
             model = SingleLayerLinearDynamicModel()
-            quantize_dynamic(model, set([nn.Linear]), inplace=True, dtype=dtype)
+            quantize_dynamic(model, {nn.Linear}, inplace=True, dtype=dtype)
             checkQuantized(model)
 
     def test_two_layers(self):
@@ -1347,7 +1363,7 @@ class TestQuantizeEagerPTQDynamic(QuantizationTestCase):
 
             class ScriptWrapperPackedLSTM(torch.nn.Module):
                 def __init__(self, cell):
-                    super(ScriptWrapperPackedLSTM, self).__init__()
+                    super().__init__()
                     self.cell = cell
 
                 def forward(self, x: PackedSequence) -> Tuple[PackedSequence, Tuple[torch.Tensor, torch.Tensor]]:
@@ -1355,7 +1371,7 @@ class TestQuantizeEagerPTQDynamic(QuantizationTestCase):
 
             class ScriptWrapperPackedGRU(torch.nn.Module):
                 def __init__(self, cell):
-                    super(ScriptWrapperPackedGRU, self).__init__()
+                    super().__init__()
                     self.cell = cell
 
                 def forward(self, x: PackedSequence) -> Tuple[PackedSequence, torch.Tensor]:
@@ -1459,7 +1475,7 @@ class TestQuantizeEagerPTQDynamic(QuantizationTestCase):
             checkHooksIsPresent(model)
 
     @skipIfNoFBGEMM
-    def test_embedding_ops_dynamic(self):
+    def test_embedding_bag_dynamic(self):
         class EmbeddingBagWithLinear(torch.nn.Module):
             def __init__(self):
                 super().__init__()
@@ -1480,9 +1496,30 @@ class TestQuantizeEagerPTQDynamic(QuantizationTestCase):
         q_model = quantize_dynamic(model, qconfig_dict)
 
         q_model(indices, offsets, torch.randn(5, 5))
-        self.assertTrue('QuantizedEmbedding' in str(q_model))
-        self.assertTrue('DynamicQuantizedLinear' in str(q_model))
+        self.assertTrue('QuantizedEmbeddingBag' in str(q_model.emb))
+        self.assertTrue('DynamicQuantizedLinear' in str(q_model.fc))
 
+    @skipIfNoFBGEMM
+    def test_embedding_ops_dynamic(self):
+        class EmbeddingWithLinear(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.emb = torch.nn.Embedding(
+                    num_embeddings=10, embedding_dim=12, scale_grad_by_freq=False)
+                self.fc = torch.nn.Linear(5, 5)
+
+            def forward(self, indices, linear_in):
+                return self.emb(indices), self.fc(linear_in)
+        model = EmbeddingWithLinear().eval()
+        qconfig_dict = {
+            torch.nn.Embedding : float_qparams_weight_only_qconfig,
+            torch.nn.Linear: default_dynamic_qconfig
+        }
+        indices = torch.tensor([9, 6, 5, 7, 8, 8, 9, 2, 8, 6, 6, 9, 1, 6, 8, 8, 3, 2, 3, 6, 3, 6, 5, 7, 0, 8, 4, 6, 5, 8, 2, 3])
+        q_model = quantize_dynamic(model, qconfig_dict)
+        self.assertTrue('QuantizedEmbedding' in str(q_model.emb))
+        self.assertTrue('DynamicQuantizedLinear' in str(q_model.fc))
+        q_model(indices, torch.randn(5, 5))
 
 if __name__ == '__main__':
     raise RuntimeError("This test file is not meant to be run directly, use:\n\n"

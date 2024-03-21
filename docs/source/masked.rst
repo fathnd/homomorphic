@@ -56,10 +56,10 @@ There are already a number of existing tutorials that we've written to help user
 -  `Advanced semantics - discussion on why certain decisions were made (e.g. requiring masks to match for binary/reduction operations),
    differences with NumPy's MaskedArray, and reduction semantics`_
 
-.. _Overview - the place to start for new users, discusses how to use MaskedTensors and why they're useful: https://pytorch.org/tutorials/prototype/maskedtensor_overview.html
-.. _Sparsity - MaskedTensor supports sparse COO and CSR data and mask Tensors: https://pytorch.org/tutorials/prototype/maskedtensor_sparsity.html
-.. _Adagrad sparse semantics - a practical example of how MaskedTensor can simplify sparse semantics and implementations: https://pytorch.org/tutorials/prototype/maskedtensor_adagrad.html
-.. _Advanced semantics - discussion on why certain decisions were made (e.g. requiring masks to match for binary/reduction operations), differences with NumPy's MaskedArray, and reduction semantics: https://pytorch.org/tutorials/prototype/maskedtensor_advanced_semantics.html
+.. _Overview - the place to start for new users, discusses how to use MaskedTensors and why they're useful: https://pytorch.org/tutorials/prototype/maskedtensor_overview
+.. _Sparsity - MaskedTensor supports sparse COO and CSR data and mask Tensors: https://pytorch.org/tutorials/prototype/maskedtensor_sparsity
+.. _Adagrad sparse semantics - a practical example of how MaskedTensor can simplify sparse semantics and implementations: https://pytorch.org/tutorials/prototype/maskedtensor_adagrad
+.. _Advanced semantics - discussion on why certain decisions were made (e.g. requiring masks to match for binary/reduction operations), differences with NumPy's MaskedArray, and reduction semantics: https://pytorch.org/tutorials/prototype/maskedtensor_advanced_semantics
 
 Supported Operators
 +++++++++++++++++++
@@ -220,7 +220,7 @@ Reductions
 ----------
 
 The following reductions are available (with autograd support). For more information, the
-`Overview <https://pytorch.org/tutorials/prototype/maskedtensor_overview.html/>`_ tutorial
+`Overview <https://pytorch.org/tutorials/prototype/maskedtensor_overview.html>`_ tutorial
 details some examples of reductions, while the
 `Advanced semantics <https://pytorch.org/tutorials/prototype/maskedtensor_advanced_semantics.html>`_ tutorial
 has some further in-depth discussions about how we decided on certain reduction semantics.
@@ -295,3 +295,12 @@ The following ops are currently supported:
     Tensor.reshape
     Tensor.reshape_as
     Tensor.view
+
+.. This module needs to be documented. Adding here in the meantime
+.. for tracking purposes
+.. py:module:: torch.masked.maskedtensor.binary
+.. py:module:: torch.masked.maskedtensor.core
+.. py:module:: torch.masked.maskedtensor.creation
+.. py:module:: torch.masked.maskedtensor.passthrough
+.. py:module:: torch.masked.maskedtensor.reductions
+.. py:module:: torch.masked.maskedtensor.unary

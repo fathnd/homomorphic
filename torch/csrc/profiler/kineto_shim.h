@@ -61,7 +61,7 @@ struct activity_t;
 #endif // USE_KINETO
 
 void addMetadata(
-    const activity_t* activity,
+    activity_t* activity,
     const std::string& key,
     const std::string& value);
 
@@ -125,6 +125,12 @@ void pushUserCorrelationId(uint64_t correlation_id);
 void popCorrelationId();
 void popUserCorrelationId();
 void recordThreadInfo();
+
+void logInvariantViolation(
+    const std::string& assertion,
+    const std::string& error,
+    const std::string& profile_id,
+    const std::string& group_profile_id);
 
 } // namespace kineto
 } // namespace impl

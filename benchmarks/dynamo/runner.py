@@ -13,10 +13,10 @@ This command will generate the commands for the default compilers (see DEFAULTS
 below) for inference, run them and visualize the logs.
 
 If you want to just print the commands, you could use the following command
--> python benchmarks/runner.py --print_run_commands --suites=torchbench --inference
+-> python benchmarks/runner.py --print-run-commands --suites=torchbench --inference
 
 Similarly, if you want to just visualize the already finished logs
--> python benchmarks/runner.py --visualize_logs --suites=torchbench --inference
+-> python benchmarks/runner.py --visualize-logs --suites=torchbench --inference
 
 If you want to test float16
 -> python benchmarks/runner.py --suites=torchbench --inference --dtypes=float16
@@ -39,7 +39,7 @@ import subprocess
 import sys
 import tempfile
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from os.path import abspath, exists
 from random import randint
 
@@ -68,18 +68,31 @@ TABLE = {
         "ts_nvfuser": "--training --nvfuser --speedup-dynamo-ts ",
         "eager": "--training --backend=eager ",
         "aot_eager": "--training --backend=aot_eager ",
-        "aot_cudagraphs": "--training --backend=aot_cudagraphs ",
+        "cudagraphs": "--training --backend=cudagraphs ",
         "aot_nvfuser": "--training --nvfuser --backend=aot_ts_nvfuser ",
         "nvprims_nvfuser": "--training --backend=nvprims_nvfuser ",
         "inductor": "--training --inductor ",
         "inductor_no_cudagraphs": "--training --inductor --disable-cudagraphs ",
+        "inductor_max_autotune": "--training --inductor --inductor-compile-mode max-autotune ",
+        "inductor_max_autotune_no_cudagraphs": (
+            "--training --inductor --inductor-compile-mode max-autotune-no-cudagraphs --disable-cudagraphs "
+        ),
     },
     "inference": {
-        "ts_nnc": "--speedup-ts",
-        "ts_nvfuser": "-n100 --speedup-ts --nvfuser",
-        "trt": "-n100 --speedup-trt",
-        "ts_nvfuser_cudagraphs": "--backend=cudagraphs_ts",
-        "inductor": "-n50 --inductor",
+        "aot_eager": "--inference --backend=aot_eager ",
+        "eager": "--inference --backend=eager ",
+        "ts_nnc": "--inference --speedup-ts ",
+        "ts_nvfuser": "--inference -n100 --speedup-ts --nvfuser ",
+        "trt": "--inference -n100 --speedup-trt ",
+        "ts_nvfuser_cudagraphs": "--inference --backend=cudagraphs_ts ",
+        "inductor": "--inference -n50 --inductor ",
+        "inductor_no_cudagraphs": "--inference -n50 --inductor --disable-cudagraphs ",
+        "inductor_max_autotune": "--inference -n50 --inductor --inductor-compile-mode max-autotune ",
+        "inductor_max_autotune_no_cudagraphs": (
+            "--inference -n50 --inductor --inductor-compile-mode max-autotune-no-cudagraphs --disable-cudagraphs "
+        ),
+        "torchscript-onnx": "--inference -n5 --torchscript-onnx",
+        "dynamo-onnx": "--inference -n5 --dynamo-onnx",
     },
 }
 
@@ -90,15 +103,18 @@ DEFAULTS = {
     "training": [
         "eager",
         "aot_eager",
-        "aot_cudagraphs",
-        "nvprims_nvfuser",
         "inductor",
         "inductor_no_cudagraphs",
     ],
-    "inference": ["ts_nvfuser_cudagraphs", "inductor"],
+    "inference": [
+        "eager",
+        "aot_eager",
+        "inductor",
+        "inductor_no_cudagraphs",
+    ],
     "flag_compilers": {
         "training": ["inductor", "inductor_no_cudagraphs"],
-        "inference": ["inductor"],
+        "inference": ["inductor", "inductor_no_cudagraphs"],
     },
     "dtypes": [
         "float32",
@@ -176,15 +192,22 @@ def parse_args():
         help="Choose the output directory to save the logs",
         default=DEFAULT_OUTPUT_DIR,
     )
+    parser.add_argument(
+        "--keep-output-dir",
+        action="store_true",
+        help="Do not cleanup the output directory before running",
+    )
 
     # Choose either generation of commands, pretty parsing or e2e runs
     group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument(
+        "--print-run-commands",
         "--print_run_commands",
         action="store_true",
         help="Generate commands and saves them to run.sh",
     )
     group.add_argument(
+        "--visualize-logs",
         "--visualize_logs",
         action="store_true",
         help="Pretty print the log files and draw graphs",
@@ -202,6 +225,14 @@ def parse_args():
         default=False,
         help="Log operator inputs",
     )
+    parser.add_argument(
+        "--include-slowdowns",
+        "--include_slowdowns",
+        action="store_true",
+        default=False,
+        help="Include slowdowns in geomean performance speedup report. By default, slowdowns are ignored. "
+        "This is because one can always use eager if compile is not speeding things up",
+    )
 
     parser.add_argument(
         "--extra-args", default="", help="Append commandline with these args"
@@ -217,16 +248,55 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--base-sha",
+        help="commit id for the tested pytorch",
+    )
+    parser.add_argument(
+        "--total-partitions",
+        type=int,
+        help="Total number of partitions, to be passed to the actual benchmark script",
+    )
+    parser.add_argument(
+        "--partition-id",
+        type=int,
+        help="ID of partition, to be passed to the actual benchmark script",
+    )
+
+    parser.add_argument(
         "--update-dashboard",
         action="store_true",
         default=False,
         help="Updates to dashboard",
     )
     parser.add_argument(
+        "--no-graphs",
+        action="store_true",
+        default=False,
+        help="Do not genenerate and upload metric graphs",
+    )
+    parser.add_argument(
+        "--no-update-archive",
+        action="store_true",
+        default=False,
+        help="Do not update lookup.csv or the log archive",
+    )
+    parser.add_argument(
+        "--no-gh-comment",
+        action="store_true",
+        default=False,
+        help="Do not write a comment to github",
+    )
+    parser.add_argument(
+        "--no-detect-regressions",
+        action="store_true",
+        default=False,
+        help="Do not compare to previous runs for regressions or metric graphs.",
+    )
+    parser.add_argument(
         "--update-dashboard-test",
         action="store_true",
         default=False,
-        help="Do not udpate lookup file or upload images/comments when --update-dashboard is specified",
+        help="does all of --no-graphs, --no-update-archive, and --no-gh-comment",
     )
     parser.add_argument(
         "--dashboard-image-uploader",
@@ -248,6 +318,47 @@ def parse_args():
         default=DASHBOARD_DEFAULTS["dashboard_gh_cli_path"],
         help="Github CLI path",
     )
+    parser.add_argument(
+        "--batch-size",
+        "--batch_size",
+        type=int,
+        default=None,
+        help="batch size for benchmarking",
+    )
+    parser.add_argument(
+        "--threads",
+        "-t",
+        type=int,
+        default=None,
+        help="number of threads to use for eager and inductor.",
+    )
+    launcher_group = parser.add_argument_group("CPU Launcher Parameters")
+    launcher_group.add_argument(
+        "--enable-cpu-launcher",
+        "--enable_cpu_launcher",
+        action="store_true",
+        default=False,
+        help="Use torch.backends.xeon.run_cpu to get the peak performance on Intel(R) Xeon(R) Scalable Processors.",
+    )
+    launcher_group.add_argument(
+        "--cpu-launcher-args",
+        "--cpu_launcher_args",
+        type=str,
+        default="",
+        help="Provide the args of torch.backends.xeon.run_cpu. "
+        "To look up what optional arguments this launcher offers: python -m torch.backends.xeon.run_cpu --help",
+    )
+    parser.add_argument(
+        "--no-cold-start-latency",
+        action="store_true",
+        default=False,
+        help="Do not include --cold-start-latency on inductor benchmarks",
+    )
+    parser.add_argument(
+        "--inductor-compile-mode",
+        default=None,
+        help="torch.compile mode argument for inductor runs.",
+    )
     args = parser.parse_args()
     return args
 
@@ -258,7 +369,7 @@ def get_mode(args):
     return "training"
 
 
-def get_skip_tests(suite):
+def get_skip_tests(suite, is_training: bool):
     """
     Generate -x seperated string to skip the unusual setup training tests
     """
@@ -267,12 +378,19 @@ def get_skip_tests(suite):
     module = importlib.import_module(suite)
     os.chdir(original_dir)
 
-    if hasattr(module, "SKIP"):
-        skip_tests.update(module.SKIP)
-    if hasattr(module, "SKIP_TRAIN"):
-        skip_tests.update(module.SKIP_TRAIN)
+    if suite == "torchbench":
+        skip_tests.update(module.TorchBenchmarkRunner().skip_models)
+        if is_training:
+            skip_tests.update(
+                module.TorchBenchmarkRunner().skip_not_suitable_for_training_models
+            )
+    else:
+        if hasattr(module, "SKIP"):
+            skip_tests.update(module.SKIP)
+        if is_training and hasattr(module, "SKIP_TRAIN"):
+            skip_tests.update(module.SKIP_TRAIN)
 
-    skip_tests = map(lambda name: f"-x {name}", skip_tests)
+    skip_tests = (f"-x {name}" for name in skip_tests)
     skip_str = " ".join(skip_tests)
     return skip_str
 
@@ -284,12 +402,23 @@ def generate_csv_name(args, dtype, suite, device, compiler, testing):
 
 def generate_commands(args, dtypes, suites, devices, compilers, output_dir):
     mode = get_mode(args)
-    with open("run.sh", "w") as runfile:
+    suites_str = "_".join(suites)
+    devices_str = "_".join(devices)
+    dtypes_str = "_".join(dtypes)
+    compilers_str = "_".join(compilers)
+    generated_file = (
+        f"run_{mode}_{devices_str}_{dtypes_str}_{suites_str}_{compilers_str}.sh"
+    )
+    with open(generated_file, "w") as runfile:
         lines = []
 
+        lines.append("#!/bin/bash")
+        lines.append("set -x")
         lines.append("# Setup the output directory")
-        lines.append(f"rm -rf {output_dir}")
-        lines.append(f"mkdir {output_dir}")
+        if not args.keep_output_dir:
+            lines.append(f"rm -rf {output_dir}")
+        # It's ok if the output directory already exists
+        lines.append(f"mkdir -p {output_dir}")
         lines.append("")
 
         for testing in ["performance", "accuracy"]:
@@ -302,10 +431,12 @@ def generate_commands(args, dtypes, suites, devices, compilers, output_dir):
                 for compiler in compilers:
                     base_cmd = info[compiler]
                     output_filename = f"{output_dir}/{generate_csv_name(args, dtype, suite, device, compiler, testing)}"
-                    cmd = f"python benchmarks/dynamo/{suite}.py --{testing} --{dtype} -d{device} --output={output_filename}"
+                    launcher_cmd = "python"
+                    if args.enable_cpu_launcher:
+                        launcher_cmd = f"python -m torch.backends.xeon.run_cpu {args.cpu_launcher_args}"
+                    cmd = f"{launcher_cmd} benchmarks/dynamo/{suite}.py --{testing} --{dtype} -d{device} --output={output_filename}"
                     cmd = f"{cmd} {base_cmd} {args.extra_args} --no-skip --dashboard"
-
-                    skip_tests_str = get_skip_tests(suite)
+                    skip_tests_str = get_skip_tests(suite, args.training)
                     cmd = f"{cmd} {skip_tests_str}"
 
                     if args.log_operator_inputs:
@@ -315,14 +446,34 @@ def generate_commands(args, dtypes, suites, devices, compilers, output_dir):
                         filters = DEFAULTS["quick"][suite]
                         cmd = f"{cmd} {filters}"
 
-                    if testing == "performance" and compiler in (
-                        "inductor",
-                        "inductor_no_cudagraphs",
+                    if (
+                        compiler
+                        in (
+                            "inductor",
+                            "inductor_no_cudagraphs",
+                        )
+                        and not args.no_cold_start_latency
                     ):
-                        cmd = f"{cmd} --cold_start_latency"
+                        cmd = f"{cmd} --cold-start-latency"
+
+                    if args.batch_size is not None:
+                        cmd = f"{cmd} --batch-size {args.batch_size}"
+
+                    if args.threads is not None:
+                        cmd = f"{cmd} --threads {args.threads}"
+
+                    if args.total_partitions is not None:
+                        cmd = f"{cmd} --total-partitions {args.total_partitions}"
+
+                    if args.partition_id is not None:
+                        cmd = f"{cmd} --partition-id {args.partition_id}"
+
+                    if args.inductor_compile_mode is not None:
+                        cmd = f"{cmd} --inductor-compile-mode {args.inductor_compile_mode}"
                     lines.append(cmd)
                 lines.append("")
         runfile.writelines([line + "\n" for line in lines])
+    return generated_file
 
 
 def generate_dropdown_comment(title, body):
@@ -337,20 +488,28 @@ def generate_dropdown_comment(title, body):
 
 
 def build_summary(args):
-    import git
-
     out_io = io.StringIO()
 
     def print_commit_hash(path, name):
-        if exists(path):
+        if args.base_sha is not None:
+            if name == "pytorch":
+                out_io.write(f"{name} commit: {args.base_sha}\n")
+        elif exists(path):
+            import git
+
             repo = git.Repo(path, search_parent_directories=True)
             sha = repo.head.object.hexsha
+            date = repo.head.object.committed_datetime
             out_io.write(f"{name} commit: {sha}\n")
+            out_io.write(f"{name} commit date: {date}\n")
         else:
             out_io.write(f"{name} Absent\n")
 
     def env_var(name):
-        out_io.write(f"{name} = {os.environ[name]}\n")
+        if name in os.environ:
+            out_io.write(f"{name} = {os.environ[name]}\n")
+        else:
+            out_io.write(f"{name} = {None}\n")
 
     out_io.write("\n")
     out_io.write("### Run name ###\n")
@@ -360,7 +519,6 @@ def build_summary(args):
     out_io.write("\n")
     out_io.write("### Commit hashes ###\n")
     print_commit_hash("../pytorch", "pytorch")
-    print_commit_hash("../functorch", "functorch")
     print_commit_hash("../torchbenchmark", "torchbench")
 
     out_io.write("\n")
@@ -380,14 +538,15 @@ def build_summary(args):
     env_var("CUDA_HOME")
     env_var("USE_LLVM")
 
-    out_io.write("\n")
-    out_io.write("### GPU details ###\n")
-    out_io.write(f"CUDNN VERSION: {torch.backends.cudnn.version()}\n")
-    out_io.write(f"Number CUDA Devices: {torch.cuda.device_count()}\n")
-    out_io.write(f"Device Name: {torch.cuda.get_device_name(0)}\n")
-    out_io.write(
-        f"Device Memory [GB]: {torch.cuda.get_device_properties(0).total_memory/1e9}\n"
-    )
+    if "cuda" in args.devices:
+        out_io.write("\n")
+        out_io.write("### GPU details ###\n")
+        out_io.write(f"CUDNN VERSION: {torch.backends.cudnn.version()}\n")
+        out_io.write(f"Number CUDA Devices: {torch.cuda.device_count()}\n")
+        out_io.write(f"Device Name: {torch.cuda.get_device_name(0)}\n")
+        out_io.write(
+            f"Device Memory [GB]: {torch.cuda.get_device_properties(0).total_memory/1e9}\n"
+        )
 
     title = "## Build Summary"
     comment = generate_dropdown_comment(title, out_io.getvalue())
@@ -409,8 +568,9 @@ def archive_data(archive_name):
         else:
             day = "000"
     else:
-        day = datetime.today().strftime("%j")
-        prefix = datetime.today().strftime(f"day_{day}_%d_%m_%y")
+        now = datetime.now(tz=timezone(timedelta(hours=-8)))
+        day = now.strftime("%j")
+        prefix = now.strftime(f"day_{day}_%d_%m_%y")
     return day, prefix
 
 
@@ -463,7 +623,7 @@ class Parser:
 
     def has_header(self, output_filename):
         header_present = False
-        with open(output_filename, "r") as f:
+        with open(output_filename) as f:
             line = f.readline()
             if "dev" in line:
                 header_present = True
@@ -472,10 +632,24 @@ class Parser:
 
 class ParsePerformanceLogs(Parser):
     def __init__(
-        self, suites, devices, dtypes, compilers, flag_compilers, mode, output_dir
+        self,
+        suites,
+        devices,
+        dtypes,
+        compilers,
+        flag_compilers,
+        mode,
+        output_dir,
+        include_slowdowns=False,
     ):
         super().__init__(
-            suites, devices, dtypes, compilers, flag_compilers, mode, output_dir
+            suites,
+            devices,
+            dtypes,
+            compilers,
+            flag_compilers,
+            mode,
+            output_dir,
         )
         self.parsed_frames = defaultdict(lambda: defaultdict(None))
         self.untouched_parsed_frames = defaultdict(lambda: defaultdict(None))
@@ -487,6 +661,7 @@ class ParsePerformanceLogs(Parser):
         ]
         self.bottom_k = 50
         self.parse()
+        self.include_slowdowns = include_slowdowns
 
     def plot_graph(self, df, title):
         labels = df.columns.values.tolist()
@@ -572,6 +747,12 @@ class ParsePerformanceLogs(Parser):
                 for idx in range(2, len(frames)):
                     df = pd.merge(df, frames[idx], on=["dev", "name", "batch_size"])
 
+            if testing == "performance":
+                for compiler in self.compilers:
+                    df[compiler] = pd.to_numeric(df[compiler], errors="coerce").fillna(
+                        0
+                    )
+
             df_copy = df.copy()
             df_copy = df_copy.sort_values(
                 by=list(reversed(self.compilers)), ascending=False
@@ -615,7 +796,9 @@ class ParsePerformanceLogs(Parser):
         return f"{df.mean():.2f}"
 
     def geomean(self, compiler, df):
-        cleaned_df = self.get_passing_entries(compiler, df).clip(1)
+        cleaned_df = self.get_passing_entries(compiler, df)
+        if not self.include_slowdowns:
+            cleaned_df = cleaned_df.clip(1)
         if cleaned_df.empty:
             return "0.0x"
         return f"{gmean(cleaned_df):.2f}x"
@@ -663,12 +846,19 @@ class ParsePerformanceLogs(Parser):
         return str_io.getvalue()
 
     def generate_executive_summary(self):
+        machine = "A100 GPUs"
+        if "cpu" in self.devices:
+            get_machine_cmd = "lscpu| grep 'Model name' | awk -F':' '{print $2}'"
+            machine = subprocess.getstatusoutput(get_machine_cmd)[1].strip()
         description = (
             "We evaluate different backends "
             "across three benchmark suites - torchbench, huggingface and timm. We run "
-            "these experiments on A100 GPUs. Each experiment runs one iteration of forward "
-            "and backward pass. For accuracy, we check the numerical correctness of forward "
-            "pass outputs and gradients by comparing with native pytorch. We measure speedup "
+            "these experiments on "
+            + machine
+            + ". Each experiment runs one iteration of forward pass "
+            "and backward pass for training and forward pass only for inference. "
+            "For accuracy, we check the numerical correctness of forward pass outputs and gradients "
+            "by comparing with native pytorch. We measure speedup "
             "by normalizing against the performance of native pytorch. We report mean "
             "compilation latency numbers and peak memory footprint reduction ratio. \n\n"
             "Caveats\n"
@@ -677,7 +867,6 @@ class ParsePerformanceLogs(Parser):
             "2) Experiments do not cover dynamic shapes.\n"
             "3) Experimental setup does not have optimizer.\n\n"
         )
-
         comment = generate_dropdown_comment("", description)
         str_io = io.StringIO()
         str_io.write("\n")
@@ -822,10 +1011,18 @@ class ParsePerformanceLogs(Parser):
 def parse_logs(args, dtypes, suites, devices, compilers, flag_compilers, output_dir):
     mode = get_mode(args)
     build_summary(args)
+    include_slowdowns = args.include_slowdowns
 
     parser_class = ParsePerformanceLogs
     parser = parser_class(
-        suites, devices, dtypes, compilers, flag_compilers, mode, output_dir
+        suites,
+        devices,
+        dtypes,
+        compilers,
+        flag_compilers,
+        mode,
+        output_dir,
+        include_slowdowns,
     )
     parser.gen_summary_files()
     return
@@ -855,7 +1052,7 @@ def find_last_2_with_filenames(lookup_file, dashboard_archive_path, dtype, filen
         fullpaths = [
             os.path.join(dashboard_archive_path, path, name) for name in filenames
         ]
-        if all([os.path.exists(fullpath) for fullpath in fullpaths]):
+        if all(os.path.exists(fullpath) for fullpath in fullpaths):
             last2.append(output_dir)
         if len(last2) >= 2:
             return last2
@@ -869,7 +1066,7 @@ class SummaryStatDiffer:
         assert os.path.exists(self.lookup_file)
 
     def generate_diff(self, last2, filename, caption):
-        df_cur, df_prev = [pd.read_csv(os.path.join(path, filename)) for path in last2]
+        df_cur, df_prev = (pd.read_csv(os.path.join(path, filename)) for path in last2)
         df_merge = df_cur.merge(df_prev, on="Compiler", suffixes=("_cur", "_prev"))
         data = {col: [] for col in ("compiler", "suite", "prev_value", "cur_value")}
         for _, row in df_merge.iterrows():
@@ -988,10 +1185,10 @@ class RegressionDetector:
                     if last2[compiler] is None:
                         continue
 
-                    df_cur, df_prev = [
+                    df_cur, df_prev = (
                         last2[compiler][i].untouched_parsed_frames[suite][metric]
                         for i in (0, 1)
-                    ]
+                    )
                     df_merge = df_cur.merge(
                         df_prev, on="name", suffixes=("_cur", "_prev")
                     )
@@ -1073,7 +1270,7 @@ class RegressionTracker:
     def generate_comment(self):
         title = "## Metrics over time ##\n"
         str_io = io.StringIO()
-        if not self.args.update_dashboard_test:
+        if not self.args.update_dashboard_test and not self.args.no_graphs:
             for name in glob.glob(self.args.output_dir + "/*over_time.png"):
                 output = (
                     subprocess.check_output([self.args.dashboard_image_uploader, name])
@@ -1089,7 +1286,7 @@ class RegressionTracker:
     def diff(self):
         log_infos = self.find_last_k()
 
-        for metric in ["geomean", "passrate"]:
+        for metric in ["geomean", "passrate", "comp_time", "memory"]:
             fig, axes = plt.subplots(nrows=1, ncols=3, figsize=(15, 5))
             for idx, suite in enumerate(self.suites):
                 dfs = []
@@ -1104,7 +1301,7 @@ class RegressionTracker:
                     df = pd.read_csv(gmean_filename)
                     if suite not in df:
                         continue
-                    if metric == "geomean":
+                    if metric == "geomean" or metric == "memory":
                         df[suite] = df[suite].str.replace("x", "").astype(float)
                     elif metric == "passrate":
                         df[suite] = df[suite].str.split("%").str[0].astype(float)
@@ -1151,7 +1348,7 @@ class DashboardUpdater:
         self.lookup_file = os.path.join(self.args.dashboard_archive_path, "lookup.csv")
         assert os.path.exists(self.lookup_file)
         try:
-            if not self.args.update_dashboard_test:
+            if not self.args.update_dashboard_test and not self.args.no_update_archive:
                 self.update_lookup_file()
         except subprocess.CalledProcessError:
             sys.stderr.write("failed to update lookup file\n")
@@ -1179,7 +1376,7 @@ class DashboardUpdater:
     def upload_graphs(self):
         title = "## Performance graphs ##\n"
         str_io = io.StringIO()
-        if not self.args.update_dashboard_test:
+        if not self.args.update_dashboard_test and not self.args.no_graphs:
             for name in glob.glob(self.output_dir + "/*png"):
                 if "over_time" not in name:
                     output = (
@@ -1201,16 +1398,16 @@ class DashboardUpdater:
             "gh_executive_summary.txt",
             "gh_summary_diff.txt",
             "gh_warnings.txt",
-            # "gh_regression.txt",
+            "gh_regression.txt",
             "gh_metric_regression.txt",
-            "gh_training.txt",
+            "gh_training.txt" if self.args.training else "gh_inference.txt",
             "gh_graphs.txt",
             "gh_build_summary.txt",
         ]
         all_lines = []
         for f in files:
             try:
-                with open(os.path.join(self.output_dir, f), "r") as fh:
+                with open(os.path.join(self.output_dir, f)) as fh:
                     all_lines.extend(fh.readlines())
             except FileNotFoundError:
                 pass
@@ -1225,13 +1422,17 @@ class DashboardUpdater:
             f.write(comment)
             filename = f.name
 
+        issue_number = "93794"
+        if self.args.dtypes[0] == "float32":
+            issue_number = "93518"
+
         subprocess.check_call(
             [
                 self.args.dashboard_gh_cli_path,
                 "issue",
                 "comment",
-                "--repo=https://github.com/pytorch/torchdynamo.git",
-                "681",
+                "--repo=https://github.com/pytorch/pytorch.git",
+                issue_number,
                 "-F",
                 filename,
             ]
@@ -1241,21 +1442,24 @@ class DashboardUpdater:
 
     def update(self):
         self.upload_graphs()
-        SummaryStatDiffer(self.args).generate_comment()
-        RegressionDetector(self.args).generate_comment()
-        try:
-            RegressionTracker(self.args).diff()
-        except Exception as e:
-            logging.exception(e)
-            with open(f"{self.args.output_dir}/gh_regression.txt", "w") as gh_fh:
-                gh_fh.write("")
+        if not self.args.no_detect_regressions:
+            SummaryStatDiffer(self.args).generate_comment()
+            RegressionDetector(self.args).generate_comment()
+            try:
+                RegressionTracker(self.args).diff()
+            except Exception as e:
+                logging.exception(e)
+                with open(f"{self.args.output_dir}/gh_regression.txt", "w") as gh_fh:
+                    gh_fh.write("")
 
         comment = self.gen_comment()
         print(comment)
 
         if not self.args.update_dashboard_test:
-            self.comment_on_gh(comment)
-            self.archive()
+            if not self.args.no_gh_comment:
+                self.comment_on_gh(comment)
+            if not self.args.no_update_archive:
+                self.archive()
 
 
 if __name__ == "__main__":
@@ -1288,30 +1492,52 @@ if __name__ == "__main__":
     args.compilers = compilers
     args.devices = devices
     args.dtypes = dtypes
+    flag_compilers = list(set(flag_compilers) & set(compilers))
     args.flag_compilers = flag_compilers
     args.suites = suites
 
     if args.print_run_commands:
-        generate_commands(args, dtypes, suites, devices, compilers, output_dir)
+        generated_file = generate_commands(
+            args, dtypes, suites, devices, compilers, output_dir
+        )
+        print(
+            f"Running commands are generated in file {generated_file}. Please run (bash {generated_file})."
+        )
     elif args.visualize_logs:
         parse_logs(args, dtypes, suites, devices, compilers, flag_compilers, output_dir)
     elif args.run:
-        generate_commands(args, dtypes, suites, devices, compilers, output_dir)
+        generated_file = generate_commands(
+            args, dtypes, suites, devices, compilers, output_dir
+        )
+        # generate memoized archive name now so that the date is reflective
+        # of when the run started
+        get_archive_name(args, dtypes[0])
         # TODO - Do we need to worry about segfaults
         try:
-            os.system("bash run.sh")
+            os.system(f"bash {generated_file}")
         except Exception as e:
             print(
-                "Running commands failed. Please run manually (bash run.sh) and inspect the errors."
+                f"Running commands failed. Please run manually (bash {generated_file}) and inspect the errors."
             )
             raise e
         if not args.log_operator_inputs:
-            archive(
-                output_dir, args.dashboard_archive_path, args.archive_name, dtypes[0]
-            )
+            if not args.no_update_archive:
+                archive(
+                    output_dir,
+                    args.dashboard_archive_path,
+                    args.archive_name,
+                    dtypes[0],
+                )
             parse_logs(
                 args, dtypes, suites, devices, compilers, flag_compilers, output_dir
             )
+            if not args.no_update_archive:
+                archive(
+                    output_dir,
+                    args.dashboard_archive_path,
+                    args.archive_name,
+                    dtypes[0],
+                )
 
     if args.update_dashboard:
         DashboardUpdater(args).update()

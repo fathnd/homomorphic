@@ -7,7 +7,6 @@
 #include <torch/csrc/jit/mobile/import.h>
 #include <torch/csrc/jit/mobile/module.h>
 #include <torch/csrc/jit/serialization/export.h>
-#include <torch/csrc/jit/serialization/flatbuffer_serializer_jit.h>
 #include <torch/csrc/jit/serialization/import.h>
 #include <torch/csrc/jit/serialization/pickler.h>
 #include <cstddef>
@@ -16,11 +15,9 @@
 namespace torch {
 namespace jit {
 
-using caffe2::serialize::FileAdapter;
 using caffe2::serialize::IStreamAdapter;
 using caffe2::serialize::PyTorchStreamReader;
 using caffe2::serialize::PyTorchStreamWriter;
-using caffe2::serialize::ReadAdapterInterface;
 
 // Current support bytecode version
 namespace {
@@ -190,10 +187,10 @@ std::stringstream update_bytecode_version(
       "bytecode",
   };
 
-  std::stringstream ouput_model_stream;
+  std::stringstream output_model_stream;
   auto writer_func = [&](const void* buf, size_t nbytes) -> size_t {
-    ouput_model_stream.write(static_cast<const char*>(buf), nbytes);
-    return !ouput_model_stream ? 0 : nbytes;
+    output_model_stream.write(static_cast<const char*>(buf), nbytes);
+    return !output_model_stream ? 0 : nbytes;
   };
 
   PyTorchStreamWriter writer_bytecode(writer_func);
@@ -221,7 +218,7 @@ std::stringstream update_bytecode_version(
       /*use_storage_context=*/true,
       storage_context);
 
-  return ouput_model_stream;
+  return output_model_stream;
 }
 } // namespace
 
@@ -310,10 +307,10 @@ std::stringstream backport_v5_to_v4(std::stringstream& input_model_stream) {
       "bytecode",
   };
 
-  std::stringstream ouput_model_stream;
+  std::stringstream output_model_stream;
   auto writer_func = [&](const void* buf, size_t nbytes) -> size_t {
-    ouput_model_stream.write(static_cast<const char*>(buf), nbytes);
-    return !ouput_model_stream ? 0 : nbytes;
+    output_model_stream.write(static_cast<const char*>(buf), nbytes);
+    return !output_model_stream ? 0 : nbytes;
   };
 
   PyTorchStreamWriter writer(writer_func);
@@ -364,7 +361,7 @@ std::stringstream backport_v5_to_v4(std::stringstream& input_model_stream) {
   auto constants_tuple =
       c10::ivalue::Tuple::create(std::move(constants_values));
   writeArchiveV4(writer, kArchiveNameConstants, constants_tuple);
-  return ouput_model_stream;
+  return output_model_stream;
 }
 
 /*
@@ -504,7 +501,6 @@ std::stringstream backport_v7_to_v6(std::stringstream& input_model_stream) {
 
 std::stringstream backport_v9_to_v8(std::stringstream& input_model_stream) {
   ExtraFilesMap extra_files;
-  register_flatbuffer_all();
   Module torch_script =
       torch::jit::load(input_model_stream, c10::nullopt, extra_files);
   std::stringstream intermediate_model_stream;

@@ -24,8 +24,7 @@ using namespace torch::jit::tensorexpr;
 
 class Kernel : public ::testing::Test {
  public:
-  // NOLINTNEXTLINE(modernize-use-override,cppcoreguidelines-explicit-virtual-functions)
-  void SetUp() {
+  void SetUp() override {
     getTEMustUseLLVMOnCPU() = false;
   }
 };
@@ -1114,7 +1113,7 @@ TEST_F(Kernel, Softmax2D) {
         const auto verification_pattern =
             format(verification_template, ver_env);
 
-        // verication sting temporarily disabled until
+        // verification sting temporarily disabled until
         // inlining of exp() is benchmarked and determined
         // torch::jit::testing::FileCheck().run(verification_pattern,
         // oss.str());
@@ -1193,7 +1192,7 @@ TEST_F(Kernel, Softmax3D) {
       ver_env.d("softmax_dim_size", softmax_dim_size);
       const auto verification_pattern = format(verification_template, ver_env);
 
-      // verication sting temporarily disabled until
+      // verification sting temporarily disabled until
       // inlining of exp() is benchmarked and determined
       // torch::jit::testing::FileCheck().run(verification_pattern, oss.str());
 
@@ -1276,7 +1275,7 @@ TEST_F(Kernel, Softmax4D) {
       ver_env.d("softmax_dim_size", softmax_dim_size);
       const auto verification_pattern = format(verification_template, ver_env);
 
-      // verication sting temporarily disabled until
+      // verification sting temporarily disabled until
       // inlining of exp() is benchmarked and determined
       // torch::jit::testing::FileCheck().run(verification_pattern, oss.str());
 
@@ -1549,7 +1548,7 @@ TEST_F(Kernel, ConstantTensorsNonContiguous) {
   auto graph = std::make_shared<Graph>();
   parseIR(graph_string, &*graph);
   // IRParser doesn't support tensor constants, so we generate several aten
-  // calls to produce non-contiguos constant tensor and then const-prop it
+  // calls to produce non-contiguous constant tensor and then const-prop it
   ConstantPropagation(graph);
 
   TensorExprKernel k(graph);
@@ -1638,7 +1637,7 @@ TEST_F(Kernel, CodegenInspection) {
   auto graph = std::make_shared<Graph>();
   parseIR(graph_string, &*graph);
   // IRParser doesn't support tensor constants, so we generate several aten
-  // calls to produce non-contiguos constant tensor and then const-prop it
+  // calls to produce non-contiguous constant tensor and then const-prop it
   ConstantPropagation(graph);
 
   TensorExprKernel k(graph);
@@ -1668,7 +1667,7 @@ Tensor lowerNanToNum(
     const std::vector<ExprHandle>& outputStrides,
     const c10::optional<ScalarType>& outputType,
     at::Device device) {
-  auto input_buf = c10::get<BufHandle>(inputs[0]);
+  auto input_buf = std::get<BufHandle>(inputs[0]);
   auto e = Compute(
       "custom_nan_to_num",
       outputShape,

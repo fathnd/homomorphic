@@ -1,28 +1,28 @@
 # Owner(s): ["oncall: distributed"]
 
+import os
 import sys
-from typing import Optional, List, cast
-from torch.distributed.checkpoint.storage import WriteResult
-
-from torch.distributed.checkpoint import (
-    StorageReader,
-    StorageWriter,
-    CheckpointException,
-    load_state_dict,
-    save_state_dict,
-)
+from typing import cast, List, Optional, Union
 
 import torch
 import torch.distributed as dist
-import torch.nn
 import torch.futures
-from torch.futures import Future
+import torch.nn
 
 from torch.distributed._shard import sharded_tensor
 
-from torch.distributed.checkpoint.default_planner import (
-    _create_default_local_metadata,
+from torch.distributed._shard.sharded_tensor import ShardedTensor, state_dict_hook
+from torch.distributed._shard.sharding_spec import ChunkShardingSpec
+
+from torch.distributed.checkpoint import (
+    CheckpointException,
+    load_state_dict,
+    save_state_dict,
+    StorageReader,
+    StorageWriter,
 )
+
+from torch.distributed.checkpoint.default_planner import _create_default_local_metadata
 
 from torch.distributed.checkpoint.metadata import (
     BytesStorageMetadata,
@@ -31,29 +31,19 @@ from torch.distributed.checkpoint.metadata import (
 )
 
 from torch.distributed.checkpoint.planner import (
-    SavePlan,
-    SavePlanner,
     LoadPlan,
     LoadPlanner,
+    SavePlan,
+    SavePlanner,
 )
+from torch.distributed.checkpoint.storage import WriteResult
+from torch.futures import Future
+from torch.testing._internal.common_distributed import requires_nccl, skip_if_lt_x_gpu
 
-from torch.distributed._shard.sharded_tensor import (
-    state_dict_hook,
-    ShardedTensor,
-)
-from torch.distributed._shard.sharding_spec import ChunkShardingSpec
-from torch.testing._internal.common_distributed import (
-    requires_nccl,
-    skip_if_lt_x_gpu,
-)
+from torch.testing._internal.common_utils import run_tests, TEST_WITH_DEV_DBG_ASAN
 from torch.testing._internal.distributed._shard.sharded_tensor import (
     ShardedTensorTestBase,
     with_comms,
-)
-
-from torch.testing._internal.common_utils import (
-    TEST_WITH_DEV_DBG_ASAN,
-    run_tests,
 )
 
 if TEST_WITH_DEV_DBG_ASAN:
@@ -175,9 +165,7 @@ class TestStorageBase:
         ranks = self._get_ranks(name)
         fut = Future()
         if ranks is not None and self.rank in ranks:
-            fut.set_exception(
-                ValueError(f"async rank fail {self.rank} for {name}")
-            )
+            fut.set_exception(ValueError(f"async rank fail {self.rank} for {name}"))
         else:
             fut.set_result(result)
         return fut
@@ -185,10 +173,13 @@ class TestStorageBase:
 
 class FaultyStorageWriter(TestStorageBase, StorageWriter):
     def __init__(self, fail_conf):
-        super(FaultyStorageWriter, self).__init__(fail_conf)
+        super().__init__(fail_conf)
 
-    def init(self, is_coordinator: bool) -> None:
-        self._fail_rank("fail_init")
+    def reset(self, checkpoint_id: Union[str, os.PathLike, None] = None) -> None:
+        return
+
+    def set_up_storage_writer(self, is_coordinator: bool) -> None:
+        self._fail_rank("fail_set_up_storage_writer")
 
     def prepare_local_plan(self, plan: SavePlan) -> SavePlan:
         self._fail_rank("fail_prepare_local_plan")
@@ -204,19 +195,24 @@ class FaultyStorageWriter(TestStorageBase, StorageWriter):
         self._fail_rank("fail_write_data")
         return self._fail_rank_async("fail_write_data_async", [])
 
-    def finish(
-        self, metadata: Metadata, results: List[List[WriteResult]]
-    ) -> None:
+    def finish(self, metadata: Metadata, results: List[List[WriteResult]]) -> None:
         self._fail_rank("fail_finish")
+
+    @classmethod
+    def validate_checkpoint_id(cls, checkpoint_id: Union[str, os.PathLike]) -> bool:
+        return True
 
 
 class FaultyStorageReader(TestStorageBase, StorageReader):
     def __init__(self, metadata, fail_conf):
-        super(FaultyStorageReader, self).__init__(fail_conf)
+        super().__init__(fail_conf)
         self.metadata = metadata
 
-    def init(self, metadata: Metadata, is_coordinator: bool) -> None:
-        self._fail_rank("fail_init")
+    def reset(self, checkpoint_id: Union[str, os.PathLike, None] = None) -> None:
+        return
+
+    def set_up_storage_reader(self, metadata: Metadata, is_coordinator: bool) -> None:
+        self._fail_rank("fail_set_up_storage_reader")
 
     def prepare_local_plan(self, plan: LoadPlan) -> LoadPlan:
         self._fail_rank("fail_prepare_local_plan")
@@ -234,14 +230,16 @@ class FaultyStorageReader(TestStorageBase, StorageReader):
         self._fail_rank("fail_read_metadata")
         return self.metadata
 
+    @classmethod
+    def validate_checkpoint_id(cls, checkpoint_id: Union[str, os.PathLike]) -> bool:
+        return True
+
 
 class TestDistributedFailure(ShardedTensorTestBase):
     def get_spec(self):
         return ChunkShardingSpec(
             dim=0,
-            placements=[
-                f"rank:{r}/cuda:{r}" for r in range(dist.get_world_size())
-            ],
+            placements=[f"rank:{r}/cuda:{r}" for r in range(dist.get_world_size())],
         )
 
     @with_comms(init_rpc=False)
@@ -270,7 +268,7 @@ class TestDistributedFailure(ShardedTensorTestBase):
         load_state_dict(state_dict, FaultyStorageReader(metadata, {}))
 
     def _test_dist_failure(self, callback, kwargs):
-        bad_ranks = list(kwargs.values())[0] if len(kwargs) > 0 else []
+        bad_ranks = next(iter(kwargs.values())) if len(kwargs) > 0 else []
 
         # Empty bad_ranks means it must work
         if len(bad_ranks) == 0:
@@ -329,7 +327,7 @@ class TestDistributedFailure(ShardedTensorTestBase):
             "bytes": [1, 2, 3, 4],
         }
 
-        self._test_save(state_dict, fail_init=[0])
+        self._test_save(state_dict, fail_set_up_storage_writer=[0])
         self._test_save(state_dict, fail_finish=[0])
         self._test_save(state_dict, fail_prepare_global_plan=[0])
 
@@ -337,7 +335,7 @@ class TestDistributedFailure(ShardedTensorTestBase):
         self._test_save(state_dict, fail_write_data=[2])
         self._test_save(state_dict, fail_write_data_async=[3])
 
-        self._test_save(state_dict, coordinator=1, fail_init=[1])
+        self._test_save(state_dict, coordinator=1, fail_set_up_storage_writer=[1])
         self._test_save(state_dict, coordinator=1, fail_finish=[1])
 
     def test_save_error_handling_no_dist(self) -> None:
@@ -345,7 +343,7 @@ class TestDistributedFailure(ShardedTensorTestBase):
 
         self.assertFalse(dist.is_initialized())
 
-        self._test_save(state_dict, fail_init=[0])
+        self._test_save(state_dict, fail_set_up_storage_writer=[0])
         self._test_save(state_dict, fail_finish=[0])
         self._test_save(state_dict, fail_prepare_global_plan=[0])
 
@@ -364,14 +362,14 @@ class TestDistributedFailure(ShardedTensorTestBase):
         }
 
         self._test_load(state_dict)
-        self._test_load(state_dict, fail_init=[0])
+        self._test_load(state_dict, fail_set_up_storage_reader=[0])
         self._test_load(state_dict, fail_prepare_global_plan=[0])
         self._test_load(state_dict, fail_read_metadata=[0])
         self._test_load(state_dict, fail_prepare_local_plan=[1])
         self._test_load(state_dict, fail_read_data=[3])
         self._test_load(state_dict, fail_read_data_async=[1])
 
-        self._test_load(state_dict, coordinator=3, fail_init=[0])
+        self._test_load(state_dict, coordinator=3, fail_set_up_storage_reader=[0])
         self._test_load(state_dict, coordinator=1, fail_read_metadata=[3])
         self._test_load(state_dict, coordinator=2, fail_read_data=[0])
         self._test_load(state_dict, coordinator=3, fail_read_data_async=[2])
@@ -380,7 +378,7 @@ class TestDistributedFailure(ShardedTensorTestBase):
     def test_load_error_handling_no_dist(self) -> None:
         state_dict = {"replicated": torch.rand(10, 10), "bytes": [1, 2, 3, 4]}
         self._test_load(state_dict)
-        self._test_load(state_dict, fail_init=[0])
+        self._test_load(state_dict, fail_set_up_storage_reader=[0])
         self._test_load(state_dict, fail_read_metadata=[0])
         self._test_load(state_dict, fail_prepare_local_plan=[0])
         self._test_load(state_dict, fail_prepare_global_plan=[0])

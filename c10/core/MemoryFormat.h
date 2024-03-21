@@ -1,10 +1,11 @@
 #pragma once
 
-#include <c10/core/Backend.h>
 #include <c10/util/ArrayRef.h>
 #include <c10/util/Exception.h>
 
+#include <cstdint>
 #include <ostream>
+#include <vector>
 
 // Memory format is not the property of a Tensor. It is the way to tell an
 // operator how the result should be organized in memory and nothing more. That
@@ -61,8 +62,9 @@ inline std::ostream& operator<<(
 
 // Note: Hardcoded the channel last stride indices here to get better
 // performance
-inline std::vector<int64_t> get_channels_last_strides_2d(IntArrayRef sizes) {
-  std::vector<int64_t> strides(sizes.size());
+template <typename T>
+inline std::vector<T> get_channels_last_strides_2d(ArrayRef<T> sizes) {
+  std::vector<T> strides(sizes.size());
   switch (sizes.size()) {
     case 4:
       strides[1] = 1;
@@ -81,8 +83,13 @@ inline std::vector<int64_t> get_channels_last_strides_2d(IntArrayRef sizes) {
   }
 }
 
-inline std::vector<int64_t> get_channels_last_strides_3d(IntArrayRef sizes) {
-  std::vector<int64_t> strides(sizes.size());
+inline std::vector<int64_t> get_channels_last_strides_2d(IntArrayRef sizes) {
+  return get_channels_last_strides_2d<int64_t>(sizes);
+}
+
+template <typename T>
+std::vector<T> get_channels_last_strides_3d(ArrayRef<T> sizes) {
+  std::vector<T> strides(sizes.size());
   switch (sizes.size()) {
     case 5:
       strides[1] = 1;
@@ -101,6 +108,10 @@ inline std::vector<int64_t> get_channels_last_strides_3d(IntArrayRef sizes) {
       TORCH_INTERNAL_ASSERT(
           false, "ChannelsLast3d doesn't support size ", sizes.size());
   }
+}
+
+inline std::vector<int64_t> get_channels_last_strides_3d(IntArrayRef sizes) {
+  return get_channels_last_strides_3d<int64_t>(sizes);
 }
 
 // NOTE:
@@ -239,6 +250,7 @@ inline bool is_channels_last_strides_2d(
   switch (sizes.size()) {
     case 4:
       return is_channels_last_strides_2d_s4(sizes, strides);
+      // NOLINTNEXTLINE(bugprone-branch-clone)
     case 3:
       // TODO dim == 3 case will be enabled once it is fully tested
       return false;
@@ -254,6 +266,7 @@ inline bool is_channels_last_strides_3d(
   switch (sizes.size()) {
     case 5:
       return is_channels_last_strides_3d_s5(sizes, strides);
+      // NOLINTNEXTLINE(bugprone-branch-clone)
     case 4:
       // TODO dim == 4 case will be enabled once it is fully tested
       return false;

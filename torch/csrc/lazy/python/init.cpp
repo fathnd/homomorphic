@@ -126,8 +126,10 @@ void initLazyBindings(PyObject* module) {
         torch::lazy::LazyGraphExecutor::Get()->WaitDeviceOps({});
       },
       py::arg("devices"));
-  lazy.def(
-      "_reset_metrics", []() { torch::lazy::MetricsArena::Get()->Reset(); });
+  lazy.def("_reset_metrics", []() {
+    torch::lazy::MetricsArena::Get()->ResetCounters();
+    torch::lazy::MetricsArena::Get()->ResetMetrics();
+  });
   lazy.def("_counter_names", []() { return torch::lazy::GetCounterNames(); });
   lazy.def(
       "_metrics_report", []() { return torch::lazy::CreateMetricReport(); });
@@ -164,7 +166,7 @@ void initLazyBindings(PyObject* module) {
     std::vector<LazyTensorPtr> xtensors;
     xtensors.reserve(tensors.size());
     for (auto& tensor : tensors) {
-      xtensors.push_back(TryGetLtcTensor(tensor));
+      xtensors.emplace_back(TryGetLtcTensor(tensor));
     }
     auto hash = LazyGraphExecutor::Get()->GetGraphHash(xtensors);
     std::string bin((const char*)&hash, sizeof(hash));
@@ -259,7 +261,7 @@ void initLazyBindings(PyObject* module) {
             if (tsDataPtr->HasValue()) {
               ivalues.emplace_back(tsDataPtr->data());
             } else {
-              CHECK(tsDataPtr->scalar.has_value());
+              TORCH_CHECK(tsDataPtr->scalar.has_value());
               ivalues.emplace_back(tsDataPtr->scalar.value());
             }
           }
@@ -305,10 +307,34 @@ void initLazyBindings(PyObject* module) {
 #endif // !(defined(FBCODE_CAFFE2) || defined(OVRSOURCE))
         return result;
       });
+  lazy_ts_backend.def("_get_latest_computation_graph", []() {
+#if !(defined(FBCODE_CAFFE2) || defined(OVRSOURCE))
+    auto computation = LazyGraphExecutor::Get()
+                           ->GetComputationCache()
+                           ->GetLatest()
+                           ->computation;
+    auto ts_computation = dynamic_cast<TSComputation*>(computation.get());
+    TORCH_CHECK(ts_computation, "Found non-TSComputation in cache");
+    return ts_computation->graph()->toString();
+#else
+    TORCH_CHECK(
+        false, "TorchScript backend not yet supported in FBCODE builds");
+    return "";
+#endif // !(defined(FBCODE_CAFFE2) || defined(OVRSOURCE))
+  });
+
+  // GetPythonFramesFunction() has not ever worked with torchdeploy/multipy
+  // possibly becuase GetPythonFrames resolves to external cpython rather
+  // than embedded cpython. So far this problem has only been observed
+  // internally, so we will just block it off there.
+
+#if !(defined(USE_DEPLOY))
 
   // When libtorch_python is loaded, we register the python frame getter
   // otherwise, debug util simply omits python frames
   GetPythonFramesFunction() = GetPythonFrames;
+
+#endif // USE_DEPLOY
 }
 
 } // namespace lazy

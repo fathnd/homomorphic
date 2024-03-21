@@ -18,6 +18,8 @@
 #include <ATen/functorch/TensorWrapper.h>
 #include <c10/core/AutogradState.h>
 
+#include <iostream>
+
 // This file contains functorch's Python bindings.
 
 namespace torch {
@@ -144,6 +146,10 @@ Tensor _remove_batch_dim(
     int64_t level,
     int64_t batch_size,
     int64_t out_dim) {
+  TORCH_CHECK(
+      out_dim == 0 || !self.key_set().has(DispatchKey::BatchedNestedTensor),
+      "Nested tensors can only be vmapped over dim=0, but got dim=",
+      out_dim);
   if (!has_level(self, level)) {
     auto self_sizes = self.sizes();
     VmapDimVector expanded_sizes(self_sizes.begin(), self_sizes.end());
@@ -156,9 +162,7 @@ Tensor _remove_batch_dim(
   const auto* batched = maybeGetBatchedImpl(self);
   TORCH_INTERNAL_ASSERT(batched != nullptr);
 
-  Tensor self_without_bdim;
-  int64_t newly_exposed_logical_dim;
-  std::tie(self_without_bdim, newly_exposed_logical_dim) =
+  auto [self_without_bdim, newly_exposed_logical_dim] =
       remove_existing_batch_dim(batched, level);
   auto result = _movedim(self_without_bdim, newly_exposed_logical_dim, out_dim);
   return result;
@@ -213,6 +217,7 @@ int64_t dlevel(const Tensor& tensor) {
   if (!wrapped->is_alive()) {
     return -1;
   }
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
   return wrapped->level().value();
 }
 
@@ -234,14 +239,6 @@ RandomnessType get_randomness_enum(const std::string& randomness) {
   }
 }
 
-void set_fwd_grad_enabled(bool enabled) {
-  c10::AutogradState::get_tls_state().set_fw_grad_mode(enabled);
-}
-
-bool get_fwd_grad_enabled() {
-  return c10::AutogradState::get_tls_state().get_fw_grad_mode();
-}
-
 int64_t _grad_increment_nesting() {
   // See NOTE [grad and vjp interaction with no_grad]
   bool prev_grad_mode = c10::GradMode::is_enabled();
@@ -257,7 +254,8 @@ int64_t _grad_decrement_nesting() {
 
 int64_t _jvp_increment_nesting() {
   // See NOTE [grad and vjp interaction with no_grad]
-  bool prev_fwd_grad_mode = get_fwd_grad_enabled();
+  bool prev_fwd_grad_mode =
+      c10::AutogradState::get_tls_state().get_fw_grad_mode();
   return initAndPushDynamicLayer(
       TransformType::Jvp,
       c10::nullopt,
@@ -273,10 +271,12 @@ int64_t _jvp_decrement_nesting() {
 }
 
 int64_t _vmap_increment_nesting(
-    int64_t batch_size,
+    c10::SymInt batch_size,
     const std::string& randomness) {
   return initAndPushDynamicLayer(
-      TransformType::Vmap, batch_size, get_randomness_enum(randomness));
+      TransformType::Vmap,
+      std::move(batch_size),
+      get_randomness_enum(randomness));
 }
 
 int64_t _vmap_decrement_nesting() {
@@ -341,6 +341,7 @@ static int64_t maybe_get_level(const Tensor& tensor) {
   auto* wrapped = maybeGetTensorWrapper(tensor);
   if (wrapped) {
     if (wrapped->level()) {
+      // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
       return *wrapped->level();
     }
     // TODO: this is a weird special case...
@@ -369,6 +370,15 @@ static int64_t currentLevel() {
   return current_level;
 }
 
+static c10::optional<int64_t> maybe_current_level() {
+  auto maybe_layer = maybeCurrentDynamicLayer();
+  if (maybe_layer.has_value()) {
+    int current_level = maybe_layer->layerId();
+    return current_level;
+  }
+  return nullopt;
+}
+
 static void tls_set_vmap_excluded(bool excluded) {
   c10::impl::tls_set_dispatch_key_excluded(
       c10::DispatchKey::FuncTorchBatched, excluded);
@@ -388,12 +398,26 @@ static void dump_local_tls() {
   std::cout << "[Local Exclude] " << tls.excluded_ << std::endl;
 }
 
+static std::tuple<Tensor, c10::optional<int64_t>> unwrapBatched(
+    const Tensor& tensor,
+    int64_t level) {
+  auto* batched = maybeGetBatchedImpl(tensor);
+  if (!batched) {
+    return std::make_tuple(tensor, nullopt);
+  }
+  if (batched->level() == level) {
+    return std::make_tuple(batched->value(), batched->bdim());
+  }
+  return std::make_tuple(tensor, nullopt);
+}
+
 void initFuncTorchBindings(PyObject* module) {
   auto _C = py::handle(module).cast<py::module>();
   auto m = _C.def_submodule("_functorch");
 
   m.def("_add_batch_dim", &_add_batch_dim, "add batch dim");
   m.def("_remove_batch_dim", &_remove_batch_dim, "remove batch dim");
+  m.def("_unwrap_batched", &unwrapBatched);
   m.def(
       "_wrap_functional_tensor",
       &_wrap_functional_tensor,
@@ -440,16 +464,17 @@ void initFuncTorchBindings(PyObject* module) {
       "get_inplace_requires_grad_allowed",
       &at::functorch::getInplaceRequiresGradAllowed);
   m.def(
-      "set_autograd_function_allowed",
-      &at::functorch::setAutogradFunctionAllowed);
+      "set_single_level_autograd_function_allowed",
+      &at::functorch::setSingleLevelAutogradFunctionAllowed);
   m.def(
-      "get_autograd_function_allowed",
-      &at::functorch::getAutogradFunctionAllowed);
+      "get_single_level_autograd_function_allowed",
+      &at::functorch::getSingleLevelAutogradFunctionAllowed);
+  m.def("unwrap_if_dead", &unwrapIfDead);
+  m.def("is_dead_tensor_wrapper", &isDeadTensorWrapper);
   m.def("dlevel", &dlevel, "dlevel");
   m.def("dump_tensor", &dump_tensor, "dump_tensor");
   m.def("reshape_dim_into", &at::functorch::reshape_dim_into);
   m.def("reshape_dim_outof", &at::functorch::reshape_dim_outof);
-  m.def("are_transforms_active", &at::functorch::areTransformsActive);
   // various debugging things. Maybe we should offer these as first-class APIs
   // on Tensors?
   m.def("is_batchedtensor", &is_batchedtensor);
@@ -458,19 +483,30 @@ void initFuncTorchBindings(PyObject* module) {
   m.def("get_unwrapped", &get_unwrapped);
   m.def("maybe_get_level", &maybe_get_level);
   m.def("maybe_get_bdim", &maybe_get_bdim);
+  m.def("maybe_current_level", &maybe_current_level);
   m.def("current_level", &currentLevel);
   m.def("tls_set_vmap_excluded", &tls_set_vmap_excluded);
   m.def("_set_dynamic_layer_keys_included", &_set_dynamic_layer_keys_included);
   m.def("dump_dls", &dump_dls);
   m.def("dump_local_tls", &dump_local_tls);
-  m.def("set_fwd_grad_enabled", &set_fwd_grad_enabled);
-  m.def("get_fwd_grad_enabled", &get_fwd_grad_enabled);
   m.def("is_functorch_wrapped_tensor", [](const Tensor& tensor) {
     return maybe_get_level(tensor) != -1;
   });
+  m.def(
+      "get_interpreter_stack", []() -> c10::optional<std::vector<Interpreter>> {
+        const auto& stack = getDynamicLayerStack();
+        if (stack.empty()) {
+          return c10::nullopt;
+        }
+        std::vector<Interpreter> result;
+        for (auto i : stack) {
+          result.push_back(i.interpreter());
+        }
+        return result;
+      });
   m.def("peek_interpreter_stack", []() -> c10::optional<Interpreter> {
     const auto& stack = getDynamicLayerStack();
-    if (stack.size() == 0) {
+    if (stack.empty()) {
       return c10::nullopt;
     }
     auto result = stack.back().interpreter();
@@ -480,6 +516,7 @@ void initFuncTorchBindings(PyObject* module) {
   m.def("push_dynamic_layer_stack", [](DynamicLayer layer) -> int64_t {
     return pushDynamicLayer(std::move(layer));
   });
+  // NOLINTNEXTLINE(bugprone-unused-raii)
   py::class_<DynamicLayer>(m, "DynamicLayer");
 
   py::enum_<TransformType>(m, "TransformType")
@@ -488,6 +525,10 @@ void initFuncTorchBindings(PyObject* module) {
       .value("Jvp", TransformType::Jvp)
       .value("Functionalize", TransformType::Functionalize)
       .value("Vmap", TransformType::Vmap);
+  py::enum_<RandomnessType>(m, "RandomnessType")
+      .value("Error", RandomnessType::Error)
+      .value("Same", RandomnessType::Same)
+      .value("Different", RandomnessType::Different);
   py::class_<Interpreter>(m, "CInterpreter")
       .def("key", &Interpreter::key)
       .def("level", &Interpreter::level);
@@ -497,11 +538,25 @@ void initFuncTorchBindings(PyObject* module) {
       .def("level", &GradInterpreterPtr::level)
       .def("lift", &GradInterpreterPtr::lift)
       .def("prevGradMode", &GradInterpreterPtr::prevGradMode);
+  py::class_<JvpInterpreterPtr>(m, "CJvpInterpreterPtr")
+      .def(py::init<const Interpreter*>())
+      .def("key", &JvpInterpreterPtr::key)
+      .def("level", &JvpInterpreterPtr::level)
+      .def("lift", &JvpInterpreterPtr::lift)
+      .def("prevFwdGradMode", &JvpInterpreterPtr::prevFwdGradMode);
   py::class_<VmapInterpreterPtr>(m, "CVmapInterpreterPtr")
       .def(py::init<const Interpreter*>())
       .def("key", &VmapInterpreterPtr::key)
       .def("level", &VmapInterpreterPtr::level)
-      .def("batchSize", &VmapInterpreterPtr::batchSize);
+      .def("batchSize", &VmapInterpreterPtr::batchSize)
+      .def("randomness", &VmapInterpreterPtr::randomness);
+  py::class_<FunctionalizeInterpreterPtr>(m, "CFunctionalizeInterpreterPtr")
+      .def(py::init<const Interpreter*>())
+      .def("key", &FunctionalizeInterpreterPtr::key)
+      .def("level", &FunctionalizeInterpreterPtr::level)
+      .def(
+          "functionalizeAddBackViews",
+          &FunctionalizeInterpreterPtr::functionalizeAddBackViews);
 }
 
 } // namespace impl

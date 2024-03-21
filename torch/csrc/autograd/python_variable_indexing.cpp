@@ -8,10 +8,14 @@
 #include <torch/csrc/autograd/variable.h>
 #include <torch/csrc/jit/frontend/tracer.h>
 #include <torch/csrc/jit/ir/ir.h>
+#include <torch/csrc/utils/numpy_stub.h>
+#include <torch/csrc/utils/pybind.h>
 #include <torch/csrc/utils/python_arg_parser.h>
 #include <torch/csrc/utils/python_compat.h>
 #include <torch/csrc/utils/python_numbers.h>
+#include <torch/csrc/utils/python_symnode.h>
 #include <torch/csrc/utils/tensor_new.h>
+#include <torch/csrc/utils/tensor_numpy.h>
 #include <torch/csrc/utils/tensor_types.h>
 
 #include <ATen/DeviceGuard.h>
@@ -24,8 +28,6 @@
 #include <c10/util/irange.h>
 
 #include <c10/core/Layout.h>
-#include <tuple>
-#include <vector>
 
 using namespace at;
 using namespace torch::autograd::utils;
@@ -87,10 +89,12 @@ static inline int64_t count_specified_dimensions(PyObject* index) {
 }
 
 [[noreturn]] static inline void invalid_index(PyObject* obj) {
-  throw IndexError(
+  TORCH_CHECK_INDEX(
+      false,
       "only integers, slices (`:`), ellipsis (`...`), None and long or byte "
-      "Variables are valid indices (got %s)",
-      Py_TYPE(obj)->tp_name);
+      "Variables are valid indices (got ",
+      Py_TYPE(obj)->tp_name,
+      ")");
 }
 
 static inline Variable sequenceToVariable(
@@ -116,6 +120,12 @@ inline Variable valueToTensor(
     scalar = Scalar(THPUtils_unpackDouble(value));
   } else if (PyComplex_Check(value)) {
     scalar = Scalar(THPUtils_unpackComplexDouble(value));
+  } else if (torch::is_symint(value)) {
+    scalar = Scalar(py::cast<c10::SymInt>(py::handle(value)));
+  } else if (torch::is_symfloat(value)) {
+    scalar = Scalar(py::cast<c10::SymFloat>(py::handle(value)));
+  } else if (torch::is_symbool(value)) {
+    scalar = Scalar(py::cast<c10::SymBool>(py::handle(value)));
   } else {
     throw TypeError(
         "can't assign a %s to a %s",
@@ -125,21 +135,11 @@ inline Variable valueToTensor(
   // lift_fresh is supposed to be used in situations where you are guaranteed to
   // get a plain Tensor which is not true for cpu device but not for non cpu
   // device
-  if (device == at::kCPU) {
+  if (device == at::kCPU && !scalar.isSymbolic()) {
     return at::lift_fresh(
         at::indexing::scalarToTensor(scalar, options, device));
   } else {
     return at::indexing::scalarToTensor(scalar, options, device);
-  }
-}
-
-static inline void checkUnpackSlice(
-    PyObject* index,
-    Py_ssize_t* start_ptr,
-    Py_ssize_t* stop_ptr,
-    Py_ssize_t* step_ptr) {
-  if (!THPUtils_unpackSlice(index, start_ptr, stop_ptr, step_ptr)) {
-    throw python_error();
   }
 }
 
@@ -214,14 +214,12 @@ static inline Variable applySlicing(
             }
             return at::indexing::TensorIndex(THPUtils_unpackLong(obj));
           } else if (PySlice_Check(obj)) {
-            // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-            Py_ssize_t start, stop, step;
-            checkUnpackSlice(obj, &start, &stop, &step);
+            auto val = __PySlice_Unpack(obj);
             if (is_tracing) {
               recordSliceTrace(obj);
             }
             return at::indexing::TensorIndex(
-                at::indexing::Slice(start, stop, step));
+                at::indexing::Slice(val.start, val.stop, val.step));
           } else if (obj == Py_Ellipsis) {
             return at::indexing::TensorIndex(at::indexing::Ellipsis);
           } else if (obj == Py_None) {
@@ -274,6 +272,14 @@ static inline bool treatSequenceAsTuple(PyObject* index) {
   if (THPVariable_Check(index)) {
     return false;
   }
+  //  Allow indexing with ndarray if numpy compilation is enabled. An ndarray
+  //  index should not be treated as a tuple since the indexing has a different
+  //  syntax.
+#ifdef USE_NUMPY
+  if (::torch::utils::is_numpy_available() && PyArray_CheckExact(index)) {
+    return false;
+  }
+#endif
   if (!PySequence_Check(index)) {
     return false;
   }
@@ -360,15 +366,14 @@ PyObject* THPVariable_getitem(PyObject* self, PyObject* index) {
     return THPVariable_Wrap(at::indexing::get_item(
         self_, {at::indexing::TensorIndex(THPUtils_unpackLong(index))}));
   } else if (PySlice_Check(index)) {
-    // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-    Py_ssize_t start, stop, step;
-    checkUnpackSlice(index, &start, &stop, &step);
+    auto val = __PySlice_Unpack(index);
     if (is_tracing) {
       recordSliceTrace(index);
     }
     return THPVariable_Wrap(at::indexing::get_item(
         self_,
-        {at::indexing::TensorIndex(at::indexing::Slice(start, stop, step))}));
+        {at::indexing::TensorIndex(
+            at::indexing::Slice(val.start, val.stop, val.step))}));
   } else if (index == Py_False || index == Py_True) {
     return THPVariable_Wrap(([&]() {
       pybind11::gil_scoped_release no_gil;
@@ -481,17 +486,17 @@ int THPVariable_setitem(PyObject* self, PyObject* index, PyObject* py_value) {
   bool is_tracing = torch::jit::tracer::isTracing();
 
   // handle simple types: integers, slices
-  if (THPUtils_checkLong(index)) {
+  if (THPUtils_checkLong(index) || torch::is_symint(index)) {
     if (is_tracing && THPVariable_Check(index)) {
       recordSelectTrace(THPVariable_Unpack(index));
     }
-    dispatch_set_item(
-        self_, {at::indexing::TensorIndex(THPUtils_unpackLong(index))}, value);
+    auto symint = torch::is_symint(index) ? py::cast<SymInt>(index)
+                                          : SymInt(THPUtils_unpackLong(index));
+    dispatch_set_item(self_, {at::indexing::TensorIndex(symint)}, value);
     return 0;
   } else if (PySlice_Check(index)) {
     // NOLINTNEXTLINE(cppcoreguidelines-init-variables)
-    Py_ssize_t start, stop, step;
-    checkUnpackSlice(index, &start, &stop, &step);
+    auto val = __PySlice_Unpack(index);
     if (is_tracing) {
       recordSliceTrace(index);
     }
@@ -499,7 +504,8 @@ int THPVariable_setitem(PyObject* self, PyObject* index, PyObject* py_value) {
     // indexing functions from Python ]
     dispatch_set_item(
         self_,
-        {at::indexing::TensorIndex(at::indexing::Slice(start, stop, step))},
+        {at::indexing::TensorIndex(
+            at::indexing::Slice(val.start, val.stop, val.step))},
         value,
         /*disable_slice_optimization=*/is_tracing);
     return 0;

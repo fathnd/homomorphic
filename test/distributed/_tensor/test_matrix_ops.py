@@ -1,20 +1,32 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates
 # Owner(s): ["oncall: distributed"]
 
+import itertools
+from typing import cast, List, Optional
+
 import torch
-from torch.testing._internal.common_utils import run_tests
+import torch.nn.functional as F
+from torch.distributed._tensor import DeviceMesh, distribute_tensor
 from torch.distributed._tensor.api import DTensor
+from torch.distributed._tensor.placement_types import (
+    _Partial,
+    Placement,
+    Replicate,
+    Shard,
+)
+from torch.testing._internal.common_distributed import run_with_both_funcol_impls
+from torch.testing._internal.common_utils import (
+    instantiate_parametrized_tests,
+    run_tests,
+)
 from torch.testing._internal.distributed._tensor.common_dtensor import (
     DTensorTestBase,
-    with_comms,
     skip_unless_torch_gpu,
+    with_comms,
 )
-from torch.distributed._tensor import distribute_tensor, DeviceMesh
-from torch.distributed._tensor.placement_types import Placement, Shard, Replicate, _Partial
-from typing import List, Optional, cast
-import itertools
 
 
+@instantiate_parametrized_tests
 class DistMatrixOpsTest(DTensorTestBase):
     @with_comms
     def test_addmm(self):
@@ -30,13 +42,25 @@ class DistMatrixOpsTest(DTensorTestBase):
         input = distribute_tensor(input_tensor, device_mesh, replica_spec)
 
         dist_res = torch.addmm(input, mat1, mat2)
-        local_res = torch.addmm(
-            input_tensor, tensor_to_shard, tensor_to_replicate
-        )
-        self.assertEqual(
-            dist_res.redistribute(device_mesh, replica_spec).to_local(),
-            local_res,
-        )
+        local_res = torch.addmm(input_tensor, tensor_to_shard, tensor_to_replicate)
+        self.assertEqual(dist_res.full_tensor(), local_res)
+
+    @with_comms
+    def test_addmm_empty_operand(self):
+        device_mesh = DeviceMesh(self.device_type, list(range(self.world_size)))
+        shard_spec = [Shard(0)]
+        replica_spec = [Replicate()]
+
+        tensor_to_shard = torch.randn(12, 0)
+        mat1 = distribute_tensor(tensor_to_shard, device_mesh, shard_spec)
+        tensor_to_replicate = torch.randn(0, 4)
+        mat2 = distribute_tensor(tensor_to_replicate, device_mesh, replica_spec)
+        input_tensor = torch.randn(4)
+        inp = distribute_tensor(input_tensor, device_mesh, replica_spec)
+
+        dist_res = torch.addmm(inp, mat1, mat2)
+        local_res = torch.addmm(input_tensor, tensor_to_shard, tensor_to_replicate)
+        self.assertEqual(dist_res.full_tensor(), local_res)
 
     @with_comms
     def test_addmm_auto_redistribute(self):
@@ -52,9 +76,7 @@ class DistMatrixOpsTest(DTensorTestBase):
         input_tensor = torch.randn(4, requires_grad=True)
         input = distribute_tensor(input_tensor, device_mesh, replica_spec)
 
-        local_res = torch.addmm(
-            input_tensor, tensor_to_shard1, tensor_to_shard0
-        )
+        local_res = torch.addmm(input_tensor, tensor_to_shard1, tensor_to_shard0)
         dist_res = torch.addmm(input, mat1, mat2)
 
         # test if addmm output is a partial
@@ -62,16 +84,14 @@ class DistMatrixOpsTest(DTensorTestBase):
         self.assertIsInstance(dist_res.placements[0], _Partial)
 
         # test if result is the same as tensor
-        replica_res = dist_res.redistribute(device_mesh, replica_spec)
-        dist_local_res = replica_res.to_local()
+        dist_local_res = dist_res.full_tensor()
         self.assertEqual(local_res, dist_local_res)
 
         # backward checks
         dist_local_res.sum().backward()
         local_res.sum().backward()
         self.assertIsNotNone(mat2.grad)
-        mat2_grad = mat2.grad.redistribute(device_mesh, replica_spec)
-        self.assertEqual(mat2_grad.to_local(), tensor_to_shard0.grad)
+        self.assertEqual(mat2.grad.full_tensor(), tensor_to_shard0.grad)
 
     @with_comms
     def test_mm(self):
@@ -99,9 +119,7 @@ class DistMatrixOpsTest(DTensorTestBase):
             self.assertIsNotNone(dt1.grad)
 
         placement_specs = [shard0_spec, shard1_spec, replica_spec]
-        shard_specs_comb = list(
-            itertools.product(placement_specs, placement_specs)
-        )
+        shard_specs_comb = list(itertools.product(placement_specs, placement_specs))
         for spec in shard_specs_comb:
             test_placement_comb([spec[0]], [spec[1]])
 
@@ -120,6 +138,7 @@ class DistMatrixOpsTest(DTensorTestBase):
         self.assertEqual(tranposed_mat2.placements, shard_spec)
 
     @with_comms
+    @run_with_both_funcol_impls
     def test_t_partial(self):
         device_mesh = DeviceMesh(self.device_type, list(range(self.world_size)))
 
@@ -147,15 +166,9 @@ class DistMatrixOpsTest(DTensorTestBase):
     @skip_unless_torch_gpu
     def test_baddbmm(self):
         device_mesh = DeviceMesh(self.device_type, list(range(self.world_size)))
-        tensor = torch.rand(
-            4, 4, 8, device=self.device_type, requires_grad=True
-        )
-        batch_1 = torch.rand(
-            4, 4, 8, device=self.device_type, requires_grad=True
-        )
-        batch_2 = torch.rand(
-            4, 8, 8, device=self.device_type, requires_grad=True
-        )
+        tensor = torch.rand(4, 4, 8, device=self.device_type, requires_grad=True)
+        batch_1 = torch.rand(4, 4, 8, device=self.device_type, requires_grad=True)
+        batch_2 = torch.rand(4, 8, 8, device=self.device_type, requires_grad=True)
 
         def test_placement_comb(
             tensor_placements: List[Placement],
@@ -165,15 +178,9 @@ class DistMatrixOpsTest(DTensorTestBase):
             alpha: int,
             batch_1_grad: Optional[torch.Tensor],
         ) -> None:
-            tensor_dt = distribute_tensor(
-                tensor, device_mesh, tensor_placements
-            )
-            batch_1_dt = distribute_tensor(
-                batch_1, device_mesh, batch_1_placements
-            )
-            batch_2_dt = distribute_tensor(
-                batch_2, device_mesh, batch_2_placements
-            )
+            tensor_dt = distribute_tensor(tensor, device_mesh, tensor_placements)
+            batch_1_dt = distribute_tensor(batch_1, device_mesh, batch_1_placements)
+            batch_2_dt = distribute_tensor(batch_2, device_mesh, batch_2_placements)
             dist_res = cast(
                 DTensor,
                 torch.baddbmm(
@@ -202,23 +209,6 @@ class DistMatrixOpsTest(DTensorTestBase):
         shard_specs_comb = list(
             itertools.product(shard_specs, shard_specs, shard_specs)
         )
-        passlist = [
-            (shard0_spec, shard0_spec, shard0_spec),
-            (shard0_spec, shard0_spec, replica_spec),
-            (shard0_spec, shard1_spec, shard0_spec),
-            (shard0_spec, shard2_spec, shard0_spec),
-            (shard1_spec, shard1_spec, replica_spec),
-            (shard0_spec, replica_spec, shard0_spec),
-            (shard2_spec, replica_spec, shard2_spec),
-            (shard2_spec, shard0_spec, shard2_spec),
-            (shard2_spec, shard1_spec, shard2_spec),
-            (shard2_spec, shard2_spec, shard2_spec),
-            (replica_spec, shard0_spec, shard0_spec),
-            (replica_spec, shard1_spec, replica_spec),
-            (replica_spec, shard2_spec, shard1_spec),
-            (replica_spec, replica_spec, shard2_spec),
-            (replica_spec, replica_spec, replica_spec),
-        ]
         # If beta is 0, input tensor will be ignored
         numeric_params_comb = [
             (0.0, 0.5),  # zero-beta
@@ -231,25 +221,11 @@ class DistMatrixOpsTest(DTensorTestBase):
             )
             grad_local_res = torch.ones_like(local_result)
             local_result.backward(grad_local_res)
-            # tests that currently pass
-            for spec in passlist:
+            # test all combos
+            for spec in shard_specs_comb:
                 test_placement_comb(
                     [spec[0]], [spec[1]], [spec[2]], beta, alpha, batch_1.grad
                 )
-            # TODO: support these tests
-            shard_specs_comb = [
-                spec for spec in shard_specs_comb if spec not in passlist
-            ]
-            for spec in shard_specs_comb:
-                with self.assertRaises(Exception):
-                    test_placement_comb(
-                        [spec[0]],
-                        [spec[1]],
-                        [spec[2]],
-                        beta,
-                        alpha,
-                        batch_1.grad,
-                    )
 
     @with_comms
     def test_bmm(self):
@@ -289,13 +265,64 @@ class DistMatrixOpsTest(DTensorTestBase):
         shard2_spec = Shard(2)
         replica_spec = Replicate()
         placement_specs = [shard0_spec, shard1_spec, shard2_spec, replica_spec]
-        shard_specs_comb = list(
-            itertools.product(placement_specs, placement_specs)
-        )
+        shard_specs_comb = list(itertools.product(placement_specs, placement_specs))
 
         # tests that currently pass
         for spec in shard_specs_comb:
             test_placement_comb([spec[0]], [spec[1]])
+
+    @with_comms
+    @skip_unless_torch_gpu
+    def test_scaled_dot_product_attention(self):
+        device_mesh = DeviceMesh(self.device_type, list(range(self.world_size)))
+        # bsz, n_heads, slen, head_dim
+        query = torch.rand(
+            (4, 8, 8, 8),
+            device=self.device_type,
+            dtype=torch.bfloat16,
+            requires_grad=True,
+        )
+        key = torch.rand(
+            (4, 8, 8, 8),
+            device=self.device_type,
+            dtype=torch.bfloat16,
+            requires_grad=True,
+        )
+        value = torch.rand(
+            (4, 8, 8, 8),
+            device=self.device_type,
+            dtype=torch.bfloat16,
+            requires_grad=True,
+        )
+
+        dist_query = distribute_tensor(query, device_mesh, [Shard(1)])
+        dist_key = distribute_tensor(key, device_mesh, [Shard(1)])
+        dist_value = distribute_tensor(value, device_mesh, [Shard(1)])
+
+        from torch.nn.attention import sdpa_kernel, SDPBackend
+
+        with sdpa_kernel(backends=[SDPBackend.FLASH_ATTENTION]):
+            dropout_p = 0.0
+            is_causal = True
+            params = torch.backends.cuda.SDPAParams(
+                query, key, value, None, dropout_p, is_causal
+            )
+            if not torch.backends.cuda.can_use_flash_attention(params, debug=False):
+                self.skipTest("Flash attention is not available")
+
+            out = F.scaled_dot_product_attention(
+                query, key, value, dropout_p=dropout_p, is_causal=is_causal
+            )
+            dist_out = F.scaled_dot_product_attention(
+                dist_query,
+                dist_key,
+                dist_value,
+                dropout_p=dropout_p,
+                is_causal=is_causal,
+            )
+            self.assertEqual(dist_out.full_tensor(), out)
+
+        # TODO: add backward test once we support the backward op
 
 
 if __name__ == "__main__":

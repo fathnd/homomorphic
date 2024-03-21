@@ -100,7 +100,6 @@ def translate(
     method: bool = False,
     allow_expensive_conversions: bool = False,
 ) -> List[Expr]:
-
     binding_exprs: List[Expr] = []
     for b in bindings:
         if isinstance(b, Binding):
@@ -295,7 +294,7 @@ Check this module for more information.
         elif goal == NamedCType("dtype", OptionalCType(BaseCType(scalarTypeT))):
             try:
                 options = direct_solve(options_ctype)
-                return f"optTypeMetaToScalarType({options}.dtype_opt())"
+                return f"c10::optTypeMetaToScalarType({options}.dtype_opt())"
             except UnsatError:
                 out_tensor = direct_solve(out_tensor_ctype)
                 return f"{out_tensor}.scalar_type()"
@@ -335,7 +334,7 @@ Check this module for more information.
                 symIntArrayRef_type = direct_solve(
                     NamedCType(goal.name, BaseCType(symIntArrayRefT))
                 )
-                return f"c10::asIntArrayRefSlow({symIntArrayRef_type})"
+                return f"C10_AS_INTARRAYREF_SLOW({symIntArrayRef_type})"
         elif goal.type == BaseCType(symIntArrayRefT):
             try:
                 r = direct_solve(NamedCType(goal.name, BaseCType(intArrayRefT)))
@@ -351,12 +350,12 @@ Check this module for more information.
             return f"{argname}.has_value() ? c10::make_optional(c10::SymInt(*{argname})) : c10::nullopt"
         elif goal.type == BaseCType(longT):
             symInt_type = direct_solve(NamedCType(goal.name, BaseCType(SymIntT)))
-            return f"{symInt_type}.expect_int()"
+            return f"{symInt_type}.guard_int(__FILE__, __LINE__)"
         elif goal.type == OptionalCType(BaseCType(longT)):
             argname = direct_solve(
                 NamedCType(goal.name, OptionalCType(BaseCType(SymIntT)))
             )
-            return f"{argname}.has_value() ? c10::make_optional({argname}->expect_int()) : c10::nullopt"
+            return f"{argname}.has_value() ? c10::make_optional({argname}->guard_int(__FILE__, __LINE__)) : c10::nullopt"
         elif goal.type == BaseCType(optionalIntArrayRefT):
             try:
                 return direct_solve(NamedCType(goal.name, optionalLongVec_ctype))
@@ -364,7 +363,7 @@ Check this module for more information.
                 argname = direct_solve(
                     NamedCType(goal.name, BaseCType(optionalSymIntArrayRefT))
                 )
-                return f"{argname}.has_value() ? c10::make_optional(c10::asIntArrayRefSlow(*{argname})) : c10::nullopt"
+                return f"{argname}.has_value() ? c10::make_optional(C10_AS_INTARRAYREF_SLOW(*{argname})) : c10::nullopt"
         elif goal.type == BaseCType(optionalSymIntArrayRefT):
             # TODO: You might also want to solve this from longSymVec_ctype or
             # an optional version of it

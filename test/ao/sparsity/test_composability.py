@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # Owner(s): ["module: unknown"]
 
 
@@ -113,7 +112,7 @@ class TestComposability(TestCase):
         self.assertTrue(hasattr(mod[5], "parametrizations"))
 
         # check that correct observers were inserted and that matching
-        # occured successfully
+        # occurred successfully
         self.assertTrue(hasattr(mod[5], "activation_post_process"))
 
         _squash_mask_calibrate_and_convert(
@@ -144,7 +143,7 @@ class TestComposability(TestCase):
         self.assertTrue(hasattr(mod[5], "parametrizations"))
 
         # check that correct observers were inserted and that matching
-        # occured successfully
+        # occurred successfully
         self.assertTrue(hasattr(mod[5], "activation_post_process"))
         sparsifier.step()
         sparsity_level = _calculate_sparsity(mod[5].weight)
@@ -183,14 +182,14 @@ class TestComposability(TestCase):
         self.assertTrue(hasattr(mod[5][0], "parametrizations"))
 
         # check that correct observers were inserted and that matching
-        # occured successfully
+        # occurred successfully
         self.assertTrue(hasattr(mod[5], "activation_post_process"))
         _squash_mask_calibrate_and_convert(
             mod, sparsifier, torch.randn(1, 4, 4, 4)
         )
 
         # check that final module is the expected quantized module and that the model runs
-        self.assertTrue(isinstance(mod[5], torch.nn.intrinsic.quantized.LinearReLU))
+        self.assertTrue(isinstance(mod[5], torch.ao.nn.intrinsic.quantized.LinearReLU))
         self.assertEqual(mod(torch.randn(1, 4, 4, 4)).shape, torch.Size([1, 4, 4, 4]))
 
     # This tests whether performing fusion before sparse prepare causes and issues. The
@@ -224,7 +223,7 @@ class TestComposability(TestCase):
         self.assertTrue(hasattr(mod[5][0], "parametrizations"))
 
         # check that correct observers were inserted and that matching
-        # occured successfully
+        # occurred successfully
         self.assertTrue(hasattr(mod[5], "activation_post_process"))
         sparsifier.step()
         sparsity_level = _calculate_sparsity(mod[5][0].weight)
@@ -232,7 +231,7 @@ class TestComposability(TestCase):
         tq.convert(mod, inplace=True)
 
         # check that final module is the expected quantized module and that the model runs
-        self.assertTrue(isinstance(mod[5], torch.nn.intrinsic.quantized.LinearReLU))
+        self.assertTrue(isinstance(mod[5], torch.ao.nn.intrinsic.quantized.LinearReLU))
         self.assertEqual(mod(torch.randn(1, 4, 4, 4)).shape, torch.Size([1, 4, 4, 4]))
 
         # check that module was actually sparsified
@@ -245,7 +244,7 @@ class TestComposability(TestCase):
 
     # This tests whether performing sparse prepare before qat prepare causes issues.
     # The primary worries were that qat_prep wouldn't recognize the parametrized
-    # modules and that the convert step for qat would remove the paramerizations
+    # modules and that the convert step for qat would remove the parametrizations
     # from the modules.
     def test_s_prep_before_qat_prep(self):
         (
@@ -261,7 +260,7 @@ class TestComposability(TestCase):
         self.assertTrue(hasattr(mod[5], "parametrizations"))
 
         # check that correct observers were inserted and that matching
-        # occured successfully
+        # occurred successfully
         self.assertTrue(hasattr(mod[5], "activation_post_process"))
         self.assertTrue(isinstance(mod[5], torch.ao.nn.qat.Linear))
         _squash_mask_calibrate_and_convert(
@@ -300,7 +299,7 @@ class TestComposability(TestCase):
         self.assertTrue(hasattr(mod[5], "parametrizations"))
 
         # check that correct observers were inserted and that matching
-        # occured successfully
+        # occurred successfully
         self.assertTrue(hasattr(mod[5], "activation_post_process"))
         self.assertTrue(isinstance(mod[5], torch.ao.nn.qat.Linear))
 
@@ -369,7 +368,7 @@ class TestFxComposability(TestCase):
         self.assertTrue(hasattr(fqn_to_module(mod, "5.0"), "parametrizations"))
 
         # check that correct observers were inserted and that matching
-        # occured successfully
+        # occurred successfully
         self.assertTrue(_module_has_activation_post_process(mod, "5"))
         sparsifier.step()
         sparsity_level = _calculate_sparsity(fqn_to_module(mod, "5.0.weight"))
@@ -377,7 +376,7 @@ class TestFxComposability(TestCase):
         mod = convert_fx(mod)
 
         # check that final module is the expected quantized module and that the model runs
-        self.assertTrue(isinstance(fqn_to_module(mod, "5"), torch.nn.intrinsic.quantized.LinearReLU))
+        self.assertTrue(isinstance(fqn_to_module(mod, "5"), torch.ao.nn.intrinsic.quantized.LinearReLU))
         self.assertEqual(mod(example).shape, torch.Size([1, 4, 4, 4]))
 
         # check that module was actually sparsified
@@ -427,7 +426,7 @@ class TestFxComposability(TestCase):
         self.assertTrue(hasattr(fqn_to_module(mod, "5.0"), "parametrizations"))
 
         # check that correct observers were inserted and that matching
-        # occured successfully
+        # occurred successfully
         self.assertTrue(_module_has_activation_post_process(mod, "5"))
         sparsifier.step()
         sparsity_level = _calculate_sparsity(fqn_to_module(mod, "5.0.weight"))
@@ -435,9 +434,9 @@ class TestFxComposability(TestCase):
         mod = convert_to_reference_fx(mod)
 
         # check that final module is the expected quantized module and that the model runs
-        self.assertTrue(isinstance(fqn_to_module(mod, "5"), torch.nn.intrinsic.LinearReLU))
+        self.assertTrue(isinstance(fqn_to_module(mod, "5"), torch.ao.nn.intrinsic.LinearReLU))
         self.assertEqual(mod(example).shape, torch.Size([1, 4, 4, 4]))
-        self.assertTrue(isinstance(fqn_to_module(mod, "5.0"), torch.nn.quantized._reference.Linear))
+        self.assertTrue(isinstance(fqn_to_module(mod, "5.0"), torch.ao.nn.quantized.reference.Linear))
 
         # check that module was actually sparsified
         cur_sparsity = _calculate_sparsity(fqn_to_module(mod, "5.0.weight"))
@@ -473,7 +472,7 @@ class TestFxComposability(TestCase):
         self.assertTrue(hasattr(fqn_to_module(mod, "5.0"), "parametrizations"))
 
         # check that correct observers were inserted and that matching
-        # occured successfully
+        # occurred successfully
         self.assertTrue(_module_has_activation_post_process(mod, "5"))
         sparsifier.step()
         sparsity_level = _calculate_sparsity(fqn_to_module(mod, "5.0.weight"))
@@ -481,7 +480,7 @@ class TestFxComposability(TestCase):
         mod = convert_fx(mod)
 
         # check that final module is the expected quantized module and that the model runs
-        self.assertTrue(isinstance(fqn_to_module(mod, "5"), torch.nn.intrinsic.quantized.LinearReLU))
+        self.assertTrue(isinstance(fqn_to_module(mod, "5"), torch.ao.nn.intrinsic.quantized.LinearReLU))
         self.assertEqual(mod(example).shape, torch.Size([1, 4, 4, 4]))
 
         # check that module was actually sparsified
@@ -519,7 +518,7 @@ class TestFxComposability(TestCase):
         self.assertTrue(isinstance(fqn_to_module(mod, "5"), torch.ao.nn.intrinsic.qat.LinearReLU))
 
         # check that correct observers were inserted and that matching
-        # occured successfully
+        # occurred successfully
         self.assertTrue(_module_has_activation_post_process(mod, "5"))
         sparsifier.step()
         sparsity_level = _calculate_sparsity(fqn_to_module(mod, "5.weight"))
@@ -527,7 +526,7 @@ class TestFxComposability(TestCase):
         mod = convert_fx(mod)
 
         # check that final module is the expected quantized module and that the model runs
-        self.assertTrue(isinstance(fqn_to_module(mod, "5"), torch.nn.intrinsic.quantized.LinearReLU))
+        self.assertTrue(isinstance(fqn_to_module(mod, "5"), torch.ao.nn.intrinsic.quantized.LinearReLU))
         self.assertEqual(mod(example).shape, torch.Size([1, 4, 4, 4]))
 
         # check that module was actually sparsified
@@ -564,7 +563,7 @@ class TestFxComposability(TestCase):
         self.assertTrue(hasattr(fqn_to_module(mod, "5.0"), "parametrizations"))
 
         # check that correct observers were inserted and that matching
-        # occured successfully
+        # occurred successfully
         self.assertTrue(_module_has_activation_post_process(mod, "5"))
         sparsifier.step()
         sparsity_level = _calculate_sparsity(fqn_to_module(mod, "5.0.weight"))
@@ -572,9 +571,9 @@ class TestFxComposability(TestCase):
         mod = convert_to_reference_fx(mod)
 
         # check that final module is the expected quantized module and that the model runs
-        self.assertTrue(isinstance(fqn_to_module(mod, "5"), torch.nn.intrinsic.LinearReLU))
+        self.assertTrue(isinstance(fqn_to_module(mod, "5"), torch.ao.nn.intrinsic.LinearReLU))
         self.assertEqual(mod(example).shape, torch.Size([1, 4, 4, 4]))
-        self.assertTrue(isinstance(fqn_to_module(mod, "5.0"), torch.nn.quantized._reference.Linear))
+        self.assertTrue(isinstance(fqn_to_module(mod, "5.0"), torch.ao.nn.quantized.reference.Linear))
 
         # check that module was actually sparsified
         cur_sparsity = _calculate_sparsity(fqn_to_module(mod, "5.0.weight"))

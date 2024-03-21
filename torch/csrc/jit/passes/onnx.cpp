@@ -8,6 +8,8 @@
 #include <torch/csrc/jit/ir/constants.h>
 #include <torch/csrc/jit/jit_log.h>
 #include <torch/csrc/jit/passes/dead_code_elimination.h>
+#include <torch/csrc/jit/passes/onnx/constant_map.h>
+#include <torch/csrc/jit/passes/onnx/helper.h>
 #include <torch/csrc/jit/passes/onnx/onnx_log.h>
 #include <torch/csrc/jit/passes/onnx/shape_type_inference.h>
 #include <torch/csrc/jit/python/python_ir.h>
@@ -90,7 +92,7 @@ void preprocessCaffe2Ops(Block* block) {
       const auto& args = schema.arguments();
       size_t origin_inputs_index = 0;
       for (const auto& arg : args) {
-        auto type = arg.type();
+        const auto& type = arg.type();
         TORCH_INTERNAL_ASSERT(origin_inputs_index < origin_inputs.size());
         const auto& origin_input = origin_inputs[origin_inputs_index++];
         if (type->kind() == TypeKind::OptionalType &&
@@ -476,15 +478,18 @@ void NodeToONNX(
         onnx_registration.attr("registry")
             .attr("is_registered_op")("prim::PythonOp", opset_version)
             .cast<bool>();
+    py::bool_ is_autograd_inlining_enabled =
+        py::cast<bool>(onnx_globals.attr("GLOBALS").attr("autograd_inlining"));
     if (!py::hasattr(pyobj, "symbolic") && !is_registered_op) {
       // Inline the subgraph within the prim::PythonOp unless
       // either of these conditions are satisfied
       // 1. The torch.autograd.Function class of this node object has `symbolic`
       // method defined.
       // 2. Custom export symbolic is registered for prim::PythonOp.
-      if (operator_export_type == ::torch::onnx::OperatorExportTypes::ONNX ||
-          operator_export_type ==
-              ::torch::onnx::OperatorExportTypes::ONNX_ATEN_FALLBACK) {
+      if ((operator_export_type == ::torch::onnx::OperatorExportTypes::ONNX ||
+           operator_export_type ==
+               ::torch::onnx::OperatorExportTypes::ONNX_ATEN_FALLBACK) &&
+          (py::cast<bool>(is_autograd_inlining_enabled))) {
         try {
           inlineAutograd(op);
         } catch (const std::exception& ex) {

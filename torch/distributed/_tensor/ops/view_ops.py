@@ -1,23 +1,18 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates
 from dataclasses import dataclass
-from typing import (
-    Callable,
-    Dict,
-    Iterable,
-    Optional,
-    Tuple,
-    Set,
-    Union,
-    Sequence,
-    cast,
-)
+from typing import Callable, cast, Dict, Iterable, Optional, Sequence, Set, Tuple, Union
 
 import torch
-from torch import Tensor
 
-from torch.distributed._tensor.placement_types import DTensorSpec, Placement, Replicate
+from torch import Tensor
+from torch._subclasses.fake_tensor import unset_fake_temporarily
+from torch.distributed._tensor._utils import compute_local_shape
 from torch.distributed._tensor.api import Shard
-from torch.distributed._tensor.dispatch import OpSchema, OutputSharding
+from torch.distributed._tensor.op_schema import (
+    OpSchema,
+    OutputSharding,
+    RuntimeSchemaInfo,
+)
 from torch.distributed._tensor.ops.utils import (
     normalize_dim,
     normalize_dims,
@@ -25,6 +20,10 @@ from torch.distributed._tensor.ops.utils import (
     register_prop_rule,
 )
 
+from torch.distributed._tensor.placement_types import DTensorSpec, Placement, Replicate
+from torch.fx.experimental.proxy_tensor import disable_proxy_modes_tracing
+
+aten = torch.ops.aten
 
 Shape = Tuple[int, ...]
 
@@ -43,7 +42,7 @@ DimMap = Tuple[DimSpec, ...]
 
 @dataclass
 class Singleton(DimSpec):
-    """Output dimension is a singleton"""
+    """Output dimension is a singleton."""
 
     pass
 
@@ -104,10 +103,7 @@ class Repeat(DimSpec):
 
 @dataclass
 class Flatten(DimSpec):
-    """
-    Output dimension is a set of input dimensions flattened, keeping
-    right-most adjacent elements adjacent in the output.
-    """
+    """Flatten a set of input dimensions, ensuring right-most adjacent elements remain adjacent in the output."""
 
     input_dims: Sequence[DimSpec]
 
@@ -130,6 +126,7 @@ class Flatten(DimSpec):
 class Split(DimSpec):
     """
     This dimension is a member of a decomposition of the input dim.
+
     Note that input_dim itself could be a Flattened set of input dims.
     """
 
@@ -138,9 +135,7 @@ class Split(DimSpec):
     split_id: int
 
     @classmethod
-    def new(
-        cls, dim: DimSpec, group_shape: Tuple[int, ...], idx: int
-    ) -> DimSpec:
+    def new(cls, dim: DimSpec, group_shape: Tuple[int, ...], idx: int) -> DimSpec:
         assert len(group_shape) > 0
         if len(group_shape) == 1:
             # not really a group, just return the input dim back
@@ -180,7 +175,7 @@ def dim_atleast_3d(ndim: int) -> DimMap:
 
 
 def expand(input_shape: Shape, shape: Shape) -> DimMap:
-    """Implements broadcast on multiple dimensions"""
+    """Implement broadcast on multiple dimensions."""
     assert len(shape) >= len(input_shape)
 
     # 1. create padded input dimensions
@@ -192,9 +187,7 @@ def expand(input_shape: Shape, shape: Shape) -> DimMap:
             actual_s = 1
             assert desired_s >= 0
         else:
-            assert isinstance(
-                p, InputDim
-            ), f"DimSpec not supported in expand: {p}"
+            assert isinstance(p, InputDim), f"DimSpec not supported in expand: {p}"
             actual_s = input_shape[p.input_dim]
             assert actual_s == 1 or desired_s == -1 or desired_s == actual_s
         mapping.append(
@@ -234,9 +227,7 @@ def dim_movedim(
     assert len(input) == len(destination)
     input_set = set(input)
     assert len(input_set) == len(input), "Found repeated input dims"
-    assert len(set(destination)) == len(
-        destination
-    ), "Found repeated output dims"
+    assert len(set(destination)) == len(destination), "Found repeated output dims"
     assert max(input) < ndim
     assert max(destination) < ndim
 
@@ -266,6 +257,7 @@ def dim_repeat(ndim: int, sizes: Shape) -> DimMap:
 def infer_size(total_size: int, sizes: Shape) -> Shape:
     """
     One dimension input to view may be "-1".
+
     Infer the size of this dimension given the total_size.
     """
     infers = [i for i, s in enumerate(sizes) if s == -1]
@@ -284,6 +276,8 @@ def infer_size(total_size: int, sizes: Shape) -> Shape:
 
 def view_groups(from_size: Shape, to_size: Shape) -> DimMap:
     """
+    Decompose a reshape operation into forwarding, flattening, or splitting dimensions for each output dimension.
+
     A view or reshape operation can be decomposed into a set of 3 types of smaller operations:
     1) Forward a dimension from input to output
     2) Flatten a set of dimensions into a single dimension
@@ -363,9 +357,7 @@ def view_groups(from_size: Shape, to_size: Shape) -> DimMap:
 
         if len(to_group_shape) > 0:
             flattened = Flatten.new(
-                tuple(
-                    InputDim(fi) for fi in from_group_dim if from_size[fi] > 1
-                )
+                tuple(InputDim(fi) for fi in from_group_dim if from_size[fi] > 1)
             )
             result_pp += [
                 Split.new(flattened, tuple(to_group_shape), i)
@@ -386,7 +378,7 @@ def dim_transpose(ndim: int, dim1: int, dim2: int) -> DimMap:
     dim2 = normalize_dim(dim2, ndim)
     assert dim1 < ndim
     assert dim2 < ndim
-    dimmap = list(InputDim(i) for i in range(ndim))
+    dimmap = [InputDim(i) for i in range(ndim)]
     swapdim = dimmap[dim1]
     dimmap[dim1] = dimmap[dim2]
     dimmap[dim2] = swapdim
@@ -397,7 +389,7 @@ def dim_squeeze(shape: Shape, dim: Optional[int] = None) -> DimMap:
     # FIXME: this is wrong when dim=None and one of the dimensions
     # equals size of the mesh. For example squeeze(DTensor(tensor(4), Shard[0])) could
     # end up as squeeze(tensor(1)) if we have 4 devices; this would lead to
-    # removal of a dimension that is not acutally a singleton.
+    # removal of a dimension that is not actually a singleton.
     return tuple(
         InputDim(i)
         for i, s in enumerate(shape)
@@ -417,6 +409,7 @@ def dim_reduction(
 ) -> DimMap:
     """
     General fallback for reduction ops where _Partial() does not apply.
+
     This will cause incoming tensor to be replicated on the reducing dimensions.
     """
     if dim_or_dims is None:
@@ -460,23 +453,17 @@ ops: Dict[Callable[..., torch.Tensor], Op] = {
         )
     ),
     torch.ravel: Op(dim_map=lambda tensor: dim_flatten(tensor.ndim)),
-    Tensor.repeat: Op(
-        dim_map=lambda self, *sizes: dim_repeat(self.ndim, sizes)
-    ),
+    Tensor.repeat: Op(dim_map=lambda self, *sizes: dim_repeat(self.ndim, sizes)),
     torch.reshape: Op(
         dim_map=lambda input, shape: view_groups(input.shape, shape),
         shape_argnum=1,
     ),
-    torch.squeeze: Op(
-        dim_map=lambda input, dim=None: dim_squeeze(input.shape, dim)
-    ),
+    torch.squeeze: Op(dim_map=lambda input, dim=None: dim_squeeze(input.shape, dim)),
     torch.tile: Op(dim_map=lambda input, dims: dim_tile(input.ndim, dims)),
     torch.transpose: Op(
         dim_map=lambda input, dim0, dim1: dim_transpose(input.ndim, dim0, dim1)
     ),
-    torch.unsqueeze: Op(
-        dim_map=lambda input, dim: dim_unsqueeze(input.ndim, dim)
-    ),
+    torch.unsqueeze: Op(dim_map=lambda input, dim: dim_unsqueeze(input.ndim, dim)),
     Tensor.view: Op(
         dim_map=lambda input, *shape: view_groups(input.shape, shape),
         shape_argnum=1,
@@ -491,6 +478,8 @@ def propagate_shape_and_sharding(
     mesh_sizes: Shape,
 ) -> Tuple[Shape, Optional[Sequence[Placement]], torch.Tensor]:
     """
+    Determine output sharding and tensor shape based on given global tensor shape and input sharding.
+
     Takes as input the global shape of the tensor, and the input sharding,
     and produce corresponding output sharding and shape of the output tensor.
 
@@ -502,9 +491,7 @@ def propagate_shape_and_sharding(
       if the leftmost split size is divisible by the mesh dimension
     """
     assert len(in_shard) == len(mesh_sizes)
-    sharded_in_dims: Set[int] = set(
-        s.dim for s in in_shard if isinstance(s, Shard)
-    )
+    sharded_in_dims: Set[int] = {s.dim for s in in_shard if isinstance(s, Shard)}
     # for each input dim, for each mesh dim, provides a list of possible shardable dimensions
     shardable_dims: torch.Tensor = torch.ones(
         (len(local_in_shape), len(mesh_sizes)), dtype=torch.bool
@@ -541,15 +528,14 @@ def propagate_shape_and_sharding(
             return (
                 prod(get_dim_size(a)[0] for a in cmd.input_dims),
                 dim0
-                if isinstance(dim0, InputDim)
-                and dim0.input_dim in sharded_in_dims
+                if isinstance(dim0, InputDim) and dim0.input_dim in sharded_in_dims
                 else None,
             )
         elif isinstance(cmd, Split):
             _, in_dim = get_dim_size(cmd.input_dim)
             out_size = cmd.group_shape[cmd.split_id]
             if cmd.split_id == 0 and in_dim is not None:
-                # we need to check that the input dimension is divisble
+                # we need to check that the input dimension is divisible
                 # by the size of the submesh we're sharding it on
                 # NOTE: it would be possible to shard the same input dimension
                 # on more than one mesh dimension. In that case, the dimension
@@ -598,32 +584,31 @@ def propagate_shape_and_sharding(
             dim_map[in_dim.input_dim] = dim
 
     needs_reshard = any(
-        isinstance(placement, Shard)
-        and not shardable_dims[placement.dim][mesh_dim]
+        isinstance(placement, Shard) and not shardable_dims[placement.dim][mesh_dim]
         for mesh_dim, placement in enumerate(in_shard)
     )
 
     output_placements = (
         None
         if needs_reshard
-        else [
-            Shard(dim_map[s.dim]) if isinstance(s, Shard) else s
-            for s in in_shard
-        ]
+        else [Shard(dim_map[s.dim]) if isinstance(s, Shard) else s for s in in_shard]
     )
 
     return (tuple(out_shape), output_placements, shardable_dims)
 
 
 def register_prop_rule_map(
-    aten_op_name: str, local_op_name: Callable[..., torch.Tensor]
+    aten_op_overload: torch._ops.OpOverload,
+    local_op_name: Callable[..., torch.Tensor],
+    schema_info: Optional[RuntimeSchemaInfo] = None,
 ) -> None:
     spec: Op = ops[local_op_name]
 
-    @register_prop_rule(aten_op_name)
+    @register_prop_rule(aten_op_overload, schema_info=schema_info)
     def reshape_prop(op_schema: OpSchema) -> OutputSharding:
         rules = spec.dim_map(*op_schema.args_schema, **op_schema.kwargs_schema)
-        input_dtensor_spec = op_schema.args_schema[0]
+        input_dtensor_spec = cast(DTensorSpec, op_schema.args_schema[0])
+        mesh = input_dtensor_spec.mesh
 
         assert isinstance(
             input_dtensor_spec, DTensorSpec
@@ -631,35 +616,45 @@ def register_prop_rule_map(
         global_in_shape = input_dtensor_spec.shape
         assert global_in_shape is not None, "Shape required."
 
-        (
-            global_out_shape,
-            shard_out,
-            shardable_dims,
-        ) = propagate_shape_and_sharding(
-            input_dtensor_spec.placements,
-            tuple(global_in_shape),
-            rules,
-            tuple(input_dtensor_spec.mesh.mesh.shape),
-        )
+        with disable_proxy_modes_tracing(), unset_fake_temporarily():
+            (
+                global_out_shape,
+                shard_out,
+                shardable_dims,
+            ) = propagate_shape_and_sharding(
+                input_dtensor_spec.placements,
+                tuple(global_in_shape),
+                rules,
+                mesh.shape,
+            )
 
         if shard_out is not None:
             # no reshard needed
-            output_dtensor_spec = DTensorSpec(
-                mesh=input_dtensor_spec.mesh,
-                placements=shard_out,
-                shape=torch.Size(global_out_shape),
-                ndim=len(global_out_shape),
-            )
-            local_out_shape = output_dtensor_spec.local_shape
+            output_dtensor_spec = DTensorSpec(mesh=mesh, placements=tuple(shard_out))
 
-            # We only need the local shape to lower he call into the local op
+            # We only need the local shape to lower the call into the local op
             args = op_schema.args_schema
             shape_argnum = spec.shape_argnum
             if shape_argnum is not None:
-                op_schema.args_schema = (
-                    args[:shape_argnum]
+                # compute the local shape from the global shape, then return
+                # a resharding even if we don't really reshard, the only reason
+                # for this type of resharding is to lower the global shape to
+                # local shape
+                local_out_shape = compute_local_shape(
+                    list(global_out_shape), mesh, shard_out
+                )
+
+                suggested_schema = OpSchema(
+                    op=op_schema.op,
+                    args_schema=args[:shape_argnum]
                     + (tuple(local_out_shape),)
-                    + args[shape_argnum + 1 :]
+                    + args[shape_argnum + 1 :],
+                    kwargs_schema=op_schema.kwargs_schema,
+                )
+                return OutputSharding(
+                    output_spec=output_dtensor_spec,
+                    schema_suggestions=[suggested_schema],
+                    needs_redistribute=True,
                 )
 
             return OutputSharding(output_spec=output_dtensor_spec)
@@ -679,13 +674,12 @@ def register_prop_rule_map(
                 output_spec=None,
                 schema_suggestions=[
                     OpSchema(
-                        func_schema=op_schema.func_schema,
+                        op=op_schema.op,
                         args_schema=(
                             DTensorSpec(
-                                placements=suggested_placements,
+                                placements=tuple(suggested_placements),
                                 mesh=input_dtensor_spec.mesh,
-                                ndim=input_dtensor_spec.ndim,
-                                shape=input_dtensor_spec.shape,
+                                tensor_meta=input_dtensor_spec.tensor_meta,
                             ),
                         )
                         + op_schema.args_schema[1:],
@@ -695,13 +689,29 @@ def register_prop_rule_map(
             )
 
 
-register_prop_rule_map("aten.squeeze.default", torch.squeeze)
-register_prop_rule_map("aten.squeeze.dim", torch.squeeze)
-register_prop_rule_map("aten.view.default", Tensor.view)
-register_prop_rule_map("aten.view.SymInt", Tensor.view)
-register_prop_rule_map("aten._unsafe_view.default", Tensor.view)
-register_prop_rule_map("aten.unsqueeze.default", torch.unsqueeze)
-register_prop_rule_map("aten.expand.default", Tensor.expand)
-register_prop_rule_map("aten.permute.default", torch.permute)
-register_prop_rule_map("aten.repeat.default", Tensor.repeat)
-register_prop_rule_map("aten.transpose.int", torch.transpose)
+register_prop_rule_map(aten.squeeze.default, torch.squeeze)
+register_prop_rule_map(
+    aten.squeeze.dim, torch.squeeze, schema_info=RuntimeSchemaInfo(1)
+)
+register_prop_rule_map(aten.view.default, Tensor.view, schema_info=RuntimeSchemaInfo(1))
+register_prop_rule_map(
+    aten.reshape.default, torch.reshape, schema_info=RuntimeSchemaInfo(1)
+)
+register_prop_rule_map(
+    aten._unsafe_view.default, Tensor.view, schema_info=RuntimeSchemaInfo(1)
+)
+register_prop_rule_map(
+    aten.unsqueeze.default, torch.unsqueeze, schema_info=RuntimeSchemaInfo(1)
+)
+register_prop_rule_map(
+    aten.expand.default, Tensor.expand, schema_info=RuntimeSchemaInfo(1)
+)
+register_prop_rule_map(
+    aten.permute.default, torch.permute, schema_info=RuntimeSchemaInfo(1)
+)
+register_prop_rule_map(
+    aten.repeat.default, Tensor.repeat, schema_info=RuntimeSchemaInfo(1)
+)
+register_prop_rule_map(
+    aten.transpose.int, torch.transpose, schema_info=RuntimeSchemaInfo(1)
+)

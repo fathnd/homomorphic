@@ -1,7 +1,7 @@
 #pragma once
 #include <ATen/cuda/Atomic.cuh>
 
-#if !(defined(USE_ROCM) || ((defined(CUDA_VERSION) && CUDA_VERSION < 11000) || (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ < 800))))
+#if !(defined(USE_ROCM) || ((defined(__CUDA_ARCH__) && (__CUDA_ARCH__ < 800))))
 #include <cuda_bf16.h>
 #endif
 
@@ -26,6 +26,17 @@ idx_cl(
   return ((n * height + h) * width + w) * channel + c;
 }
 
+// fastSpecializedAtomicAdd (and fastAtomicAdd) are an optimization
+// that speed up half-precision atomics.  The situation with half
+// precision atomics is that we have a slow __half atomic, and
+// a fast vectored __half2 atomic (this can be worth up to a 6x
+// speedup, see https://github.com/pytorch/pytorch/pull/21879).
+// We can convert a __half atomic into a __half2 atomic by simply
+// pairing the __half with a zero entry on the left/right depending
+// on alignment... but only if this wouldn't cause an out of bounds
+// access!  Thus, you must specify tensor and numel so we can check
+// if you would be out-of-bounds and use a plain __half atomic if
+// you would be.
 template <
     typename scalar_t,
     typename index_t,
@@ -38,7 +49,6 @@ __device__ __forceinline__ void fastSpecializedAtomicAdd(
     scalar_t value) {
 #if (                      \
     (defined(USE_ROCM)) || \
-    (defined(CUDA_VERSION) && (CUDA_VERSION < 10000)) || \
     (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ < 700)))
   gpuAtomicAddNoReturn(
       reinterpret_cast<at::Half*>(tensor) + index,
@@ -50,14 +60,14 @@ __device__ __forceinline__ void fastSpecializedAtomicAdd(
 
   if (low_byte && index < (numel - 1)) {
     __half2 value2;
-    value2.x = value;
+    value2.x = static_cast<__half>(value);
     value2.y = __int2half_rz(0);
     atomicAdd(reinterpret_cast<__half2*>(target_addr), value2);
 
   } else if (!low_byte && index > 0) {
     __half2 value2;
     value2.x = __int2half_rz(0);
-    value2.y = value;
+    value2.y = static_cast<__half>(value);
     atomicAdd(reinterpret_cast<__half2*>(target_addr - 1), value2);
 
   } else {
@@ -79,7 +89,6 @@ __device__ __forceinline__ void fastSpecializedAtomicAdd(
     scalar_t value) {
 #if (                      \
     (defined(USE_ROCM)) || \
-    (defined(CUDA_VERSION) && (CUDA_VERSION < 11000)) || \
     (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ < 800)))
   gpuAtomicAddNoReturn(
       reinterpret_cast<at::BFloat16*>(tensor) + index,

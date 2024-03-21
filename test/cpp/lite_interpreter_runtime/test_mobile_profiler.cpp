@@ -1,3 +1,4 @@
+#include <ATen/Functions.h>
 #include <gtest/gtest.h>
 #include <test/cpp/jit/test_utils.h>
 #include <torch/csrc/jit/api/module.h>
@@ -32,7 +33,7 @@ bool checkMetaData(
           if (line.find(metadata_val) != std::string::npos ||
               !metadata_val.size()) {
             /* if found the right metadata_val OR if expected
-             * metadata value is an empty string then ignore the matadata_val */
+             * metadata value is an empty string then ignore the metadata_val */
             return true;
           }
         }
@@ -61,7 +62,9 @@ TEST(MobileProfiler, ModuleHierarchy) {
         false, // profile memory
         true, // record callstack
         false, // record flops
-        true); // record module hierarchy
+        true, // record module hierarchy
+        {}, // events
+        false); // adjust_vulkan_timestamps
     bc.forward(inputs);
   } // End of profiler
   std::ifstream trace_file(trace_file_name);

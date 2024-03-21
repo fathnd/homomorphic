@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 
 import warnings
 
@@ -9,6 +8,8 @@ import torch
 from torch import Tensor
 from torch.masked import as_masked_tensor, is_masked_tensor, MaskedTensor
 from . import _docs
+from torch._prims_common import corresponding_real_dtype
+from torch import sym_float
 
 if TYPE_CHECKING:
     from torch.types import _dtype as DType
@@ -20,7 +21,7 @@ else:
     DimOrDims = Optional[Tuple[int]]
 
 
-__all__ = []
+__all__: List[str] = []
 
 # All masked reduction/normalization operations have the same
 # signatures. Here we introduce docstring templates that are applied
@@ -378,11 +379,11 @@ defined as ``prod(x[:i])``.""",
     )
 
     # Apply function name info to docstring templates:
-    templates = dict(
-        (k, v.format_map(template_data))
+    templates = {
+        k: v.format_map(template_data)
         for k, v in docstring_templates.items()
         if k.startswith(op_kind)
-    )
+    }
     templates.update(
         (k, v.format_map(template_data) if isinstance(v, str) else v)
         for k, v in template_data.items()
@@ -404,7 +405,7 @@ def _reduction_identity(op_name: str, input: Tensor, *args):
     The identity value of the operation is defined as the initial
     value to reduction operation that has a property ``op(op_identity,
     value) == value`` for any value in the domain of the operation.
-    Or put it another way, including or exlucing the identity value in
+    Or put it another way, including or excluding the identity value in
     a list of operands will not change the reduction result.
 
     See https://github.com/pytorch/rfcs/pull/27 for more information.
@@ -462,7 +463,7 @@ def _canonical_dim(dim: DimOrDims, ndim: int) -> Tuple[int, ...]:
     if dim is None:
         return tuple(range(ndim))
     ndim = max(ndim, 1)
-    dim_ = (dim,) if isinstance(dim, int) else dim
+    dim_ = (dim,) if isinstance(dim, (int, torch.SymInt)) else dim
     for d in dim_:
         if d in dims:
             raise RuntimeError(f"dim={d} appears multiple times in the list of dims")
@@ -783,10 +784,7 @@ def _sparse_csr_segment_reduction_helper(
             )
             new_nnz = new_crow_indices[-1]
             new_col_indices = col_indices.new_zeros(new_nnz)
-            # segment_reduce takes 'max'/'min' rather than 'amax'/'amin', changing this would be BC-breaking
-            if reduce in ["amax", "amin"]:
-                reduce = reduce[1:]
-            new_values = torch.segment_reduce(values, reduce, offsets=crow_indices)
+            new_values = torch._segment_reduce(values, reduce, offsets=crow_indices)  # type: ignore[attr-defined]
             new_shape = [mask_input.size(0), 1]
     else:
         assert len(dims) == 2
@@ -1303,7 +1301,7 @@ def amin(
 @_apply_docstring_templates
 def argmax(
     input: Union[Tensor, MaskedTensor],
-    dim: int = None,
+    dim: Optional[int] = None,
     *,
     keepdim: Optional[bool] = False,
     dtype: Optional[DType] = None,
@@ -1329,7 +1327,7 @@ def argmax(
 @_apply_docstring_templates
 def argmin(
     input: Union[Tensor, MaskedTensor],
-    dim: int = None,
+    dim: Optional[int] = None,
     *,
     keepdim: Optional[bool] = False,
     dtype: Optional[DType] = None,
@@ -1478,8 +1476,7 @@ def logsumexp(
         )
 
 
-# TODO: Add docstring; currently they're only set up for reductions and normalizations
-# @_apply_docstring_templates
+# Cannot use _apply_docstring_templates as it is only set up for reductions and normalizations
 def logaddexp(
     input: Union[Tensor, MaskedTensor],
     other: Union[Tensor, MaskedTensor],
@@ -1488,6 +1485,48 @@ def logaddexp(
     input_mask: Optional[Tensor] = None,
     other_mask: Optional[Tensor] = None,
 ) -> Tensor:
+    """logaddexp(input, other, *, dtype=None, input_mask=None, other_mask=None) -> Tensor
+
+Returns logaddexp of all the elements in the :attr:`input` and the :attr:`other`
+tensor. The :attr:`input` elements are masked out according to the boolean tensor
+:attr:`input_mask` and the attr:`other` elements are masked out according to the boolean tensor
+:attr:`other_mask`.
+
+The shapes of a mask tensor and the tensor to be masked
+don't need to match, but they must be :ref:`broadcastable
+<broadcasting-semantics>` and the dimensionality of the mask
+tensor must not be greater than of the tensor to be masked.
+
+Args:
+    input (Tensor): the input tensor
+    other (Tensor): the second input tensor
+
+Keyword args:
+    dtype (:class:`torch.dtype`, optional): the desired data type
+      of returned tensor.  If specified, the output tensor is
+      casted to :attr:`dtype` after the operation is
+      performed. Default: None.
+    input_mask (:class:`torch.Tensor`, optional): the boolean tensor
+      containing the binary mask of validity of :attr:`input` tensor elements.
+      Default: None that is equivalent to ``torch.ones(input.shape, dtype=torch.bool)``.
+    other_mask (:class:`torch.Tensor`, optional): the boolean tensor
+      containing the binary mask of validity of :attr:`other` tensor elements.
+      Default: None that is equivalent to ``torch.ones(other.shape, dtype=torch.bool)``.
+
+Example::
+
+    >>> input = torch.tensor([-100.0, -200, -300])
+    >>> input
+    tensor([-100., -200., -300.])
+    >>> other = torch.tensor([-1.0, -2, -3])
+    >>> other
+    tensor([-1., -2., -3.])
+    >>> mask = torch.tensor([True, False, True])
+    >>> mask
+    tensor([ True, False,  True])
+    >>> torch.masked._ops.logaddexp(input, other, input_mask=mask, other_mask=mask)
+    tensor([-1., -inf, -3.])
+"""
     if dtype is None:
         dtype = input.dtype
     if input.layout == torch.strided and other.layout == torch.strided:
@@ -1538,14 +1577,22 @@ reduction, is ``{identity_float32}``, except for ``ord=-inf`` it is
 
 def _std_var(
     input: Union[Tensor, MaskedTensor],
-    dim: DimOrDims = None,
-    unbiased: Optional[bool] = False,
+    dim: DimOrDims,
+    unbiased: Optional[bool],
     *,
-    keepdim: Optional[bool] = False,
-    dtype: Optional[DType] = None,
-    mask: Optional[Tensor] = None,
-    take_sqrt: Optional[bool] = False,
+    correction_opt: Optional[Union[int, float]],
+    keepdim: Optional[bool],
+    dtype: Optional[DType],
+    mask: Optional[Tensor],
+    take_sqrt: Optional[bool],
 ) -> Tensor:
+    assert (unbiased is None or correction_opt is None), "Only one of unbiased and correction may be given"
+    correction = 1.0
+    if unbiased is not None:
+        correction = 1.0 if unbiased else 0.0
+    if correction_opt is not None:
+        correction = sym_float(correction_opt)
+
     if dtype is None:
         dtype = input.dtype
         if not (dtype.is_floating_point or dtype.is_complex):
@@ -1580,12 +1627,15 @@ def _std_var(
             total = sum(x * x.conj(), dim, keepdim=keepdim, dtype=compute_dtype)
         else:
             total = sum(
-                x * x.conj(), dim, keepdim=keepdim, dtype=compute_dtype, mask=inmask
+                x * x.conj(), dim, keepdim=keepdim, dtype=compute_dtype, mask=inmask  # type: ignore[possibly-undefined]
             )
         if not keepdim:
             count = count.reshape(total.shape)
-        if unbiased:
-            count = torch.subtract(count, 1)
+        if correction != 0:
+            real_dtype = (corresponding_real_dtype(compute_dtype)
+                          if compute_dtype.is_complex else compute_dtype)
+            count = count.to(real_dtype)
+            count = torch.subtract(count, correction)
             count = torch.maximum(count, count.new_zeros([]))
         output = torch.divide(total, count).to(dtype=dtype)
         if take_sqrt:
@@ -1601,8 +1651,9 @@ def _std_var(
 def var(
     input: Union[Tensor, MaskedTensor],
     dim: DimOrDims = None,
-    unbiased: Optional[bool] = False,
+    unbiased: Optional[bool] = None,
     *,
+    correction: Optional[Union[int, float]] = None,
     keepdim: Optional[bool] = False,
     dtype: Optional[DType] = None,
     mask: Optional[Tensor] = None,
@@ -1619,6 +1670,7 @@ fully masked-out elements, have ``nan`` values.
         input=input,
         dim=dim,
         unbiased=unbiased,
+        correction_opt=correction,
         keepdim=keepdim,
         dtype=dtype,
         mask=mask,
@@ -1630,8 +1682,9 @@ fully masked-out elements, have ``nan`` values.
 def std(
     input: Union[Tensor, MaskedTensor],
     dim: DimOrDims = None,
-    unbiased: Optional[bool] = False,
+    unbiased: Optional[bool] = None,
     *,
+    correction: Optional[int] = None,
     keepdim: Optional[bool] = False,
     dtype: Optional[DType] = None,
     mask: Optional[Tensor] = None,
@@ -1648,6 +1701,7 @@ fully masked-out elements, have ``nan`` values.
         input=input,
         dim=dim,
         unbiased=unbiased,
+        correction_opt=correction,
         keepdim=keepdim,
         dtype=dtype,
         mask=mask,

@@ -17,6 +17,8 @@ except ImportError:
     from common import timed
     from dist_util import apply_fsdp, cleanup, get_model, model_iter_fn, setup
 
+log = logging.getLogger(__name__)
+
 
 def torchviz_model(args, model, inputs, rank):
     from torchviz import make_dot
@@ -79,8 +81,11 @@ def run_model(args, model, inputs, key):
         if args.verbose:
             dynamo.config.verbose = True
             dynamo.config.log_level = logging.DEBUG
-        if args.dynamo_optimize_ddp:
-            dynamo.config.optimize_ddp = True
+        if args.dynamo_no_optimize_ddp:
+            dynamo.config.optimize_ddp = False
+        if args.dynamo == "inductor" and args.fsdp:
+            torch._inductor.config.triton.cudagraphs = False
+            log.warning("disabling inductor cudagraphs for compatibility with FSDP")
 
         def print_compile(gm, ex):
             print(
@@ -116,27 +121,32 @@ if __name__ == "__main__":
         help="if set to a str, uses dynamo[str] backend. else, eager",
     )
     parser.add_argument("--verbose", action="store_true")
-    parser.add_argument("--batch_size", default=None)
+    parser.add_argument("--batch-size", "--batch_size", default=None)
     parser.add_argument(
         "--torchviz", action="store_true", help="Dump autograd graph with torchviz"
     )
     parser.add_argument("--profile", action="store_true", help="Run the profiler")
-    parser.add_argument("--trace_file", default="profile.json", help="Run the profiler")
+    parser.add_argument(
+        "--trace-file", "--trace_file", default="profile.json", help="Run the profiler"
+    )
     parser.add_argument("--repeat", default=10, help="Repeats for timing run")
     parser.add_argument(
-        "--dynamo_optimize_ddp",
+        "--dynamo-no-optimize-ddp",
+        "--dynamo_no_optimize_ddp",
         action="store_true",
-        help="Enable dynamo's ddp optimizer",
+        help="Disable dynamo's ddp optimizer (enabled by default)",
     )
     parser.add_argument(
+        "--fsdp-checkpoint",
         "--fsdp_checkpoint",
         action="store_true",
-        help="whether to use gradient checkpointing via model-specific policy",
+        help="Use gradient checkpointing via model-specific policy",
     )
     parser.add_argument(
+        "--fsdp-wrap",
         "--fsdp_wrap",
         action="store_true",
-        help="whether to apply fsdp to submodules via model-specific policy",
+        help="Apply fsdp to submodules via model-specific policy",
     )
 
     dist_arg = parser.add_mutually_exclusive_group()
@@ -145,10 +155,12 @@ if __name__ == "__main__":
 
     model_arg = parser.add_mutually_exclusive_group(required=True)
     model_arg.add_argument(
-        "--torchbench_model", help="name of torchbench model, e.g. hf_Bert"
+        "--torchbench-model",
+        "--torchbench_model",
+        help="name of torchbench model, e.g. hf_Bert",
     )
     model_arg.add_argument(
-        "--toy_model", action="store_true", help="use toy model instead"
+        "--toy-model", "--toy_model", action="store_true", help="use toy model instead"
     )
     args = parser.parse_args()
 

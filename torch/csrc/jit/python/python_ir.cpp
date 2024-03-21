@@ -23,8 +23,7 @@
 #include <sstream>
 #include <utility>
 
-namespace torch {
-namespace jit {
+namespace torch::jit {
 
 // Controls whether graph source ranges are printed by default
 bool global_print_source_ranges = true;
@@ -260,31 +259,26 @@ void initPythonIRBindings(PyObject* module_) {
              const std::string& onnx_file_path,
              const NodeAttrNameMap& node_attr_to_name) {
             std::string graph;
-            std::shared_ptr<::ONNX_NAMESPACE::ModelProto> model_proto;
-            RawDataExportMap export_map;
-            SymbolDimMap symbol_map;
-            bool val_use_external_data_format = false;
-            NodeNameMap onnx_node_names;
-            std::tie(
-                model_proto,
-                export_map,
-                symbol_map,
-                val_use_external_data_format,
-                onnx_node_names) =
-                export_onnx(
-                    g,
-                    initializers,
-                    onnx_opset_version,
-                    dynamic_axes,
-                    defer_weight_export,
-                    operator_export_type,
-                    strip_doc_string,
-                    keep_initializers_as_inputs,
-                    custom_opsets,
-                    add_node_names,
-                    val_use_external_data_format,
-                    onnx_file_path,
-                    node_attr_to_name);
+            auto
+                [model_proto,
+                 export_map,
+                 symbol_map,
+                 val_use_external_data_format,
+                 onnx_node_names] =
+                    export_onnx(
+                        g,
+                        initializers,
+                        onnx_opset_version,
+                        dynamic_axes,
+                        defer_weight_export,
+                        operator_export_type,
+                        strip_doc_string,
+                        keep_initializers_as_inputs,
+                        custom_opsets,
+                        add_node_names,
+                        false,
+                        onnx_file_path,
+                        node_attr_to_name);
             std::unordered_map<std::string, py::bytes>
                 python_serialized_export_map;
             for (auto& kv : export_map) {
@@ -995,6 +989,8 @@ void initPythonIRBindings(PyObject* module_) {
       .def_static("get", &IntType::get);
   py::class_<SymIntType, Type, SymIntTypePtr>(m, "SymIntType")
       .def_static("get", &SymIntType::get);
+  py::class_<SymBoolType, Type, SymBoolTypePtr>(m, "SymBoolType")
+      .def_static("get", &SymBoolType::get);
   py::class_<FloatType, Type, FloatTypePtr>(m, "FloatType")
       .def_static("get", &FloatType::get);
   py::class_<ComplexType, Type, ComplexTypePtr>(m, "ComplexType")
@@ -1011,6 +1007,10 @@ void initPythonIRBindings(PyObject* module_) {
       .def_static("get", &StringType::get);
   py::class_<DeviceObjType, Type, DeviceObjTypePtr>(m, "DeviceObjType")
       .def_static("get", &DeviceObjType::get);
+  // TODO(antoniojkim): Add GeneratorType to the public API once its been added
+  //                    to the public documentation
+  py::class_<GeneratorType, Type, GeneratorTypePtr>(m, "_GeneratorType")
+      .def_static("get", &GeneratorType::get);
   py::class_<StreamObjType, Type, StreamObjTypePtr>(m, "StreamObjType")
       .def_static("get", &StreamObjType::get);
   py::class_<PyObjectType, Type, PyObjectTypePtr>(m, "PyObjectType")
@@ -1039,6 +1039,7 @@ void initPythonIRBindings(PyObject* module_) {
       .def_static("ofFloats", &ListType::ofFloats)
       .def_static("ofComplexDoubles", &ListType::ofComplexDoubles)
       .def_static("ofBools", &ListType::ofBools)
+      .def_static("ofStrings", &ListType::ofStrings)
       .def("getElementType", &ListType::getElementType);
   py::class_<DictType, Type, DictTypePtr>(m, "DictType")
       .def(py::init([](TypePtr key, TypePtr value) {
@@ -1059,6 +1060,10 @@ void initPythonIRBindings(PyObject* module_) {
       .def(py::init([](TypePtr a) { return FutureType::create(std::move(a)); }))
       .def("getElementType", &FutureType::getElementType);
 
+  py::class_<AwaitType, Type, AwaitTypePtr>(m, "AwaitType")
+      .def(py::init([](TypePtr a) { return AwaitType::create(std::move(a)); }))
+      .def("getElementType", &AwaitType::getElementType);
+
   py::class_<ClassType, Type, ClassTypePtr>(m, "ClassType")
       .def(py::init([](const std::string& qualified_name) {
         return get_python_cu()->get_class(c10::QualifiedName(qualified_name));
@@ -1076,7 +1081,7 @@ void initPythonIRBindings(PyObject* module_) {
         for (const auto& enum_name_value : enum_names_values) {
           auto enum_name = py::cast<std::string>(enum_name_value.attr("name"));
           auto enum_value = toIValue(enum_name_value.attr("value"), value_type);
-          names_values.emplace_back(std::make_pair(enum_name, enum_value));
+          names_values.emplace_back(enum_name, enum_value);
         }
         return EnumType::create(
             c10::QualifiedName(qualified_name),
@@ -1144,5 +1149,4 @@ void initPythonIRBindings(PyObject* module_) {
             return g.graph_output_to_symbolic_shape_dim_;
           });
 }
-} // namespace jit
-} // namespace torch
+} // namespace torch::jit

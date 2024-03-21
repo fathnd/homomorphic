@@ -41,7 +41,7 @@ static bool use_two_pass_reduction(TensorIteratorBase& iter) {
 static void two_pass_reduction(TensorIteratorBase& iter, loop2d_t loop) {
   const int max_threads = at::get_num_threads();
 
-  auto dst = iter.output(0);
+  const auto& dst = iter.output(0);
   auto unsqueezed = dst.unsqueeze(0);
   auto buffer_shape = DimVector(unsqueezed.sizes());
   buffer_shape[0] = max_threads;
@@ -59,7 +59,7 @@ static void two_pass_reduction(TensorIteratorBase& iter, loop2d_t loop) {
     auto shape = first_reduce.shape();
     auto strides = first_reduce.get_strides();
 
-    // Bump output ptr so each thread has its own ouput slice
+    // Bump output ptr so each thread has its own output slice
     auto base_ptrs = first_reduce.get_base_ptrs();
     base_ptrs[0] += buffer_stride * thread_num;
 
