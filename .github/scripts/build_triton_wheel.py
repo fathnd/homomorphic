@@ -11,8 +11,7 @@ SCRIPT_DIR = Path(__file__).parent
 REPO_DIR = SCRIPT_DIR.parent.parent
 
 # TODO: Remove me once Triton version is again in sync for vanilla and ROCm
-ROCM_TRITION_VERSION = "2.1.0"
-
+ROCM_TRITION_VERSION = "2.2.0"
 
 def read_triton_pin(rocm_hash: bool = False) -> str:
     triton_file = "triton.txt" if not rocm_hash else "triton-rocm.txt"
@@ -46,6 +45,7 @@ def patch_setup_py(
     # Replace version
     if not expected_version:
         expected_version = read_triton_version()
+
     orig = check_and_replace(
         orig, f'version="{expected_version}",', f'version="{version}",'
     )
@@ -99,7 +99,20 @@ def build_triton(
             triton_repo = "https://github.com/openai/triton"
             triton_pkg_name = "pytorch-triton"
         check_call(["git", "clone", triton_repo], cwd=tmpdir)
-        check_call(["git", "checkout", commit_hash], cwd=triton_basedir)
+        if release:
+            ver, rev, patch = version.split(".")
+            if build_rocm:
+                check_call(
+                    ["git", "checkout", f"release/2.2.x"], cwd=triton_basedir
+                )
+            else:
+                check_call(
+                    ["git", "checkout", f"release/{ver}.{rev}.x"], cwd=triton_basedir
+                )
+
+        else:
+            check_call(["git", "checkout", commit_hash], cwd=triton_basedir)
+
         if build_conda:
             with open(triton_basedir / "meta.yaml", "w") as meta:
                 print(
@@ -109,7 +122,7 @@ def build_triton(
                 print("source:\n  path: .\n", file=meta)
                 print(
                     "build:\n  string: py{{py}}\n  number: 1\n  script: cd python; "
-                    "python setup.py install --record=record.txt\n",
+                    "python setup.py install --single-version-externally-managed --record=record.txt\n",
                     " script_env:\n   - MAX_JOBS\n",
                     file=meta,
                 )
