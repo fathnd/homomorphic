@@ -453,6 +453,105 @@ def _sfdp_replacement_17(query, key, value, attn_mask, inv_scale, dropout_p):
     )
 
 
+def _sfdp_pattern_18(
+    query, key, value, inv_scale, causal_mask_value, causal_mask, dropout_p
+):
+    # for hf_GPT2 with dropout
+    query = query.permute([0, 2, 1, 3])
+    key = key.permute([0, 2, 1, 3])
+    value = value.permute([0, 2, 1, 3])
+    attn_weights = torch.matmul(query, key.permute(0, 1, 3, 2))
+    attn_weights = attn_weights.div(inv_scale)
+    attn_weights = torch.where(causal_mask, attn_weights, causal_mask_value)
+    return (
+        (
+            torch.nn.functional.dropout(attn_weights.softmax(dim=-1), dropout_p).matmul(
+                value
+            )
+        ),
+        key,
+        value,
+    )
+
+
+def _sfdp_replacement_18(
+    query, key, value, inv_scale, causal_mask_value, causal_mask, dropout_p
+):
+    counters["inductor"]["fuse_attention"] += 1
+    return (
+        aten.scaled_dot_product_attention(
+            query.transpose(1, 2),
+            key.transpose(1, 2),
+            value.transpose(1, 2),
+            attn_mask=causal_mask,
+            dropout_p=dropout_p,
+            is_causal=False,
+            scale=1.0 / math.sqrt(value.size(-1)),
+        ),
+        key,
+        value,
+    )
+
+
+def _sfdp_pattern_19(
+    query, key, value, inv_scale, causal_mask_value, causal_mask, dropout_p
+):
+    # for hf_GPT2 with dropout (batch size 1)
+    attn_weights = torch.matmul(query, key.permute(0, 1, 3, 2))
+    attn_weights = attn_weights.div(inv_scale)
+    attn_weights = torch.where(causal_mask, attn_weights, causal_mask_value)
+    return torch.nn.functional.dropout(attn_weights.softmax(dim=-1), dropout_p).matmul(
+        value
+    )
+
+
+def _sfdp_replacement_19(
+    query, key, value, inv_scale, causal_mask_value, causal_mask, dropout_p
+):
+    counters["inductor"]["fuse_attention"] += 1
+    return aten.scaled_dot_product_attention(
+        query,
+        key,
+        value,
+        attn_mask=causal_mask,
+        dropout_p=dropout_p,
+        is_causal=False,
+        scale=1.0 / math.sqrt(value.size(-1)),
+    )
+
+
+def _sfdp_pattern_20(query, key, value, causal_mask, attn_mask, inv_scale, dropout_p):
+    # for hf_GPT2 with both causal mask and attention mask
+    query = query.permute([0, 2, 1, 3])
+    key = key.permute([0, 2, 1, 3])
+    value = value.permute([0, 2, 1, 3])
+    attn_weights = torch.matmul(query, key.permute(0, 1, 3, 2))
+    attn_weights = attn_weights.div(inv_scale)
+    fill_value = torch.full((), -float("inf"), dtype=query.dtype, device=query.device)
+    attn_weights = torch.where(causal_mask, attn_weights, fill_value)
+    attn_weights += attn_mask
+    return torch.nn.functional.dropout(attn_weights.softmax(dim=-1), dropout_p).matmul(
+        value
+    )
+
+
+def _sfdp_replacement_20(
+    query, key, value, causal_mask, attn_mask, inv_scale, dropout_p
+):
+    counters["inductor"]["fuse_attention"] += 1
+    fill_value = torch.full((), -float("inf"), dtype=query.dtype, device=query.device)
+    attn_mask = torch.where(causal_mask, attn_mask, fill_value)
+    return aten.scaled_dot_product_attention(
+        query.transpose(1, 2),
+        key.transpose(1, 2),
+        value.transpose(1, 2),
+        attn_mask=attn_mask,
+        dropout_p=dropout_p,
+        is_causal=False,
+        scale=1.0 / math.sqrt(value.size(-1)),
+    )
+
+
 def _sfdp_params_check(match):
     assert all(k in match.kwargs for k in ("query", "key", "value"))
     query = match.kwargs["query"].meta["val"]
@@ -543,12 +642,20 @@ def _get_sfdp_patterns():
     )
     # attn_mask
     b_inp = functools.partial(torch.empty, (1, 1, 8, 8), device=device)
+
     m_inp = functools.partial(torch.empty, (2, 1, 1, 4), device=device)
+    m_transposed_inp = functools.partial(torch.empty, (2, 1, 1, 8), device=device)
     # inv_scale
     c_inp = functools.partial(torch.tensor, 2.0, device=device)
     # workaround https://github.com/pytorch/pytorch/issues/97894
     # 0.113377 is a "magic" value that lets us recover the lost input arg relationship
     d = {"dropout_p": 0.113377}
+
+    # causal_mask
+    cmask_inp = functools.partial(torch.empty, (1, 1, 4, 4), device=device)
+    cmask_q_post_permute_inp = functools.partial(
+        torch.empty, (1, 1, 8, 8), device=device
+    )
 
     # we could also generate all these patterns in 3d.. TODO
     g_3d_inp = functools.partial(
@@ -568,13 +675,20 @@ def _get_sfdp_patterns():
     for dtype in [torch.float, torch.half]:
         g = functools.partial(g_inp, dtype=dtype)
         b = functools.partial(b_inp, dtype=dtype)
+        m_transposed_inputs = functools.partial(m_transposed_inp, dtype=dtype)
         m = functools.partial(m_inp, dtype=dtype)
         m_float = functools.partial(m_inp, dtype=torch.float)
+        m_bool = functools.partial(m_inp, dtype=torch.bool)
         c = functools.partial(c_inp, dtype=dtype)
         g_3d = functools.partial(g_3d_inp, dtype=dtype)
         g_bs1 = functools.partial(g_bs1_inp, dtype=dtype)
         m_bs1 = functools.partial(m_bs1_inp, dtype=dtype)
         m_bs1_float = functools.partial(m_bs1_inp, dtype=torch.float)
+        m_bs1_bool = functools.partial(m_bs1_inp, dtype=torch.bool)
+        cmask = functools.partial(cmask_inp, dtype=torch.bool)
+        cmask_q_post_permute = functools.partial(
+            cmask_q_post_permute_inp, dtype=torch.bool
+        )
 
         candidates = [
             (
@@ -701,6 +815,34 @@ def _get_sfdp_patterns():
                 _sfdp_pattern_17,
                 _sfdp_replacement_17,
                 [g(), g(), g(), m(), c()],
+                d,
+                _sfdp_extra_check(aten.div.Tensor),
+            ),
+            (
+                _sfdp_pattern_18,
+                _sfdp_replacement_18,
+                [g(), g(), g(), c(), c(), cmask()],
+                d,
+                _sfdp_params_check,
+            ),
+            (
+                _sfdp_pattern_19,
+                _sfdp_replacement_19,
+                [g(), g(), g(), c(), c(), cmask_q_post_permute()],
+                d,
+                _sfdp_params_check,
+            ),
+            (
+                _sfdp_pattern_20,
+                _sfdp_replacement_20,
+                [g(), g(), g(), m_bool(), m(), c()],
+                d,
+                _sfdp_extra_check(aten.div.Tensor),
+            ),
+            (
+                _sfdp_pattern_20,
+                _sfdp_replacement_20,
+                [g_bs1(), g_bs1(), g_bs1(), m_bs1_bool(), m_bs1(), c()],
                 d,
                 _sfdp_extra_check(aten.div.Tensor),
             ),
