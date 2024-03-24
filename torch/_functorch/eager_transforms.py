@@ -6,7 +6,7 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Callable, Union, Tuple, List, Any, Optional
+from typing import Callable, Tuple, List, Any, Optional
 import torch
 from functools import partial, wraps
 import contextlib
@@ -418,8 +418,17 @@ def error_if_complex(func_name, args, is_input):
                        f"to be real but received complex tensor at flattened input idx: {idx}")
             raise RuntimeError(err_msg)
 
+
+def _error_if_not_argnum_t(caller: str, arg_name: str, value: Any) -> None:
+    if not isinstance(value, int) and not isinstance(value, tuple):
+        raise TypeError(f"{caller}: `{arg_name}` should be int or Tuple[int, ...], got: {type(value)}")
+    elif isinstance(value, tuple) and not all(isinstance(element, int) for element in value):
+        types = ', '.join([str(type(element)) for element in value])
+        raise TypeError(f"{caller}: `{arg_name}` should be int or Tuple[int, ...], got: Tuple[{types}]")
+
+
 @exposed_in("torch.func")
-def jacrev(func: Callable, argnums: Union[int, Tuple[int]] = 0, *, has_aux=False,
+def jacrev(func: Callable, argnums: argnums_t = 0, *, has_aux=False,
            chunk_size: Optional[int] = None,
            _preallocate_and_copy=False):
     """
@@ -434,7 +443,7 @@ def jacrev(func: Callable, argnums: Union[int, Tuple[int]] = 0, *, has_aux=False
     Args:
         func (function): A Python function that takes one or more arguments,
             one of which must be a Tensor, and returns one or more Tensors
-        argnums (int or Tuple[int]): Optional, integer or tuple of integers,
+        argnums (int or Tuple[int, ...]): Optional, integer or tuple of integers,
             saying which arguments to get the Jacobian with respect to.
             Default: 0.
         has_aux (bool): Flag indicating that ``func`` returns a
@@ -550,6 +559,8 @@ def jacrev(func: Callable, argnums: Union[int, Tuple[int]] = 0, *, has_aux=False
     """
     if not (chunk_size is None or chunk_size > 0):
         raise ValueError("jacrev: `chunk_size` should be greater than 0.")
+
+    _error_if_not_argnum_t("jacrev", "argnums", argnums)
 
     @wraps(func)
     def wrapper_fn(*args):
@@ -1066,7 +1077,7 @@ def jacfwd(func: Callable, argnums: argnums_t = 0, has_aux: bool = False, *, ran
     Args:
         func (function): A Python function that takes one or more arguments,
             one of which must be a Tensor, and returns one or more Tensors
-        argnums (int or Tuple[int]): Optional, integer or tuple of integers,
+        argnums (int or Tuple[int, ...]): Optional, integer or tuple of integers,
             saying which arguments to get the Jacobian with respect to.
             Default: 0.
         has_aux (bool): Flag indicating that ``func`` returns a
@@ -1163,10 +1174,12 @@ def jacfwd(func: Callable, argnums: argnums_t = 0, has_aux: bool = False, *, ran
         >>> assert torch.allclose(jacobian[1], expectedY)
 
     """
+    _error_if_not_argnum_t("jacfwd", "argnums", argnums)
+
     @wraps(func)
     def wrapper_fn(*args):
         error_if_complex("jacfwd", args, is_input=True)
-        primals = args if argnums is None else _slice_argnums(args, argnums)
+        primals = _slice_argnums(args, argnums)
         flat_primals, primals_spec = tree_flatten(primals)
         flat_primals_numels = tuple(p.numel() for p in flat_primals)
         flat_basis = _construct_standard_basis_for(flat_primals, flat_primals_numels)
