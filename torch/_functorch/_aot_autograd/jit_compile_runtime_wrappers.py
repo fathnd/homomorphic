@@ -281,6 +281,7 @@ def aot_dispatch_autograd(
                     fw_metadata.tokens
                 )  # See Note [Side-Effectful Tokens in AOTAutograd]
             )
+            # NOTE(yf225): this is AOTAutograd fwd-bwd code path
             fw_module, bw_module = aot_config.partition_fn(
                 fx_g, joint_inputs, num_fwd_outputs=num_inner_fwd_outputs
             )

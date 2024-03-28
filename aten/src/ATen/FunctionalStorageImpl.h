@@ -94,6 +94,9 @@ struct TORCH_API FunctionalStorageImpl : public c10::StorageImpl {
   const Tensor& base() {
     return base_;
   }
+  const Tensor& original_base() {
+    return original_base_;
+  }
   size_t generation() const {
     return generation_;
   }
@@ -102,6 +105,39 @@ struct TORCH_API FunctionalStorageImpl : public c10::StorageImpl {
   }
 
   ~FunctionalStorageImpl() override = default;
+
+  void mark_mutation() {
+    mutation_counter_++;
+  }
+  void mark_mutation_during_no_grad_or_inference_mode() {
+    mutation_counter_during_no_grad_or_inference_mode_++;
+  }
+  void mark_mutation_hidden_from_autograd() {
+    mutation_counter_hidden_from_autograd_++;
+  }
+
+  bool are_all_mutations_under_no_grad_or_inference_mode() const {
+    auto non_autograd_mutations =
+        mutation_counter_during_no_grad_or_inference_mode_ +
+        mutation_counter_hidden_from_autograd_;
+    // The <= is because both counters will technically be incremented, if we
+    // perform e.g. a triton kernel mutation under no_grad
+    return mutation_counter_ <= non_autograd_mutations;
+  }
+
+  bool are_all_mutations_hidden_from_autograd() const {
+    // mutations under no_grad / inference_mode are technically not hidden from
+    // autograd - they change the version counter
+    return mutation_counter_ <= mutation_counter_hidden_from_autograd_;
+  }
+
+  void mark_inductor_storage_resize() {
+    inductor_storage_resized_ = true;
+  }
+
+  bool was_inductor_storage_resized() {
+    return inductor_storage_resized_;
+  }
 
  private:
   // NB: base_ should always point to a tensor BELOW the current
@@ -113,6 +149,8 @@ struct TORCH_API FunctionalStorageImpl : public c10::StorageImpl {
   // [Functionalization: Walualias Removal] for a diagram that shows this
   // visually.
   at::Tensor base_;
+  // Keep the original value of the tensor around
+  at::Tensor original_base_;
   std::vector<Update> updates_;
   // generation_ gets incremented every time a mutation is queued onto the
   // alias. It is used to determine if a given tensor is "up to date", or if it
@@ -121,6 +159,12 @@ struct TORCH_API FunctionalStorageImpl : public c10::StorageImpl {
   // If frozen, no more mutations are allowed on this storage.  Once frozen, a
   // storage cannot be unfrozen.
   bool frozen_ = false;
+
+  bool inductor_storage_resized_ = false;
+
+  uint64_t mutation_counter_during_no_grad_or_inference_mode_ = 0;
+  uint64_t mutation_counter_ = 0;
+  uint64_t mutation_counter_hidden_from_autograd_ = 0;
 };
 
 } // namespace at::functionalization

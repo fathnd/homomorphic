@@ -67,7 +67,10 @@ class FSDPCommContext:
         if training_state in (TrainingState.FORWARD, TrainingState.PRE_BACKWARD):
             # Use separate streams for implicit prefetching
             return self.all_gather_copy_in_stream, self.all_gather_stream
-        current_stream = torch.cuda.current_stream()
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            current_stream = torch.cuda.current_stream()
+        else:
+            current_stream = None
         return current_stream, current_stream
 
 
@@ -214,7 +217,8 @@ class FSDPParamGroup:
         if self._reshard_after_forward_event is not None:
             # Resharded parameter data is allocated in the default stream and
             # used in the all-gather streams
-            self._wait_all_gather_streams_on_event(self._reshard_after_forward_event)
+            if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+                self._wait_all_gather_streams_on_event(self._reshard_after_forward_event)
             self._reshard_after_forward_event = None
         self._all_gather_result = foreach_all_gather(
             self.fsdp_params,
@@ -237,7 +241,8 @@ class FSDPParamGroup:
             return  # no preceding unshard
         if self._training_state == TrainingState.FORWARD:  # implicit prefetch
             if prev_all_gather_state := self.comm_ctx.all_gather_state:
-                self._wait_all_gather_streams_on_event(prev_all_gather_state.event)
+                if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+                    self._wait_all_gather_streams_on_event(prev_all_gather_state.event)
                 self.comm_ctx.all_gather_state = None  # free the all-gather result
         foreach_all_gather_copy_out(
             self._all_gather_result, self.fsdp_params, self._all_gather_process_group
@@ -245,14 +250,18 @@ class FSDPParamGroup:
         for fsdp_param in self.fsdp_params:
             fsdp_param.init_unsharded_param()  # no-op after 1st call
         self._to_unsharded()
-        all_gather_copy_out_event = torch.cuda.Event()
-        all_gather_copy_out_event.record()
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            all_gather_copy_out_event = torch.cuda.Event()
+            all_gather_copy_out_event.record()
+        else:
+            all_gather_copy_out_event = None
         if self._training_state == TrainingState.FORWARD:
             self.comm_ctx.all_gather_state = AllGatherState(
                 self._all_gather_result, all_gather_copy_out_event
             )
         else:
-            self._wait_all_gather_streams_on_event(all_gather_copy_out_event)
+            if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+                self._wait_all_gather_streams_on_event(all_gather_copy_out_event)
         self._all_gather_result = None  # free unless saved in `all_gather_state`
 
     def _wait_all_gather_streams_on_event(self, event: torch.cuda.Event):
@@ -300,7 +309,8 @@ class FSDPParamGroup:
             self.unshard()  # no-op if prefetched
             self.wait_for_unshard()
             # Can be already removed if running multiple `backward`s
-            self.all_forward_output_grad_fns.discard(forward_grad_fns)
+            if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+                self.all_forward_output_grad_fns.discard(forward_grad_fns)
             self._prefetch_unshard()
 
     def post_backward(self, *unused: Any):
@@ -339,11 +349,13 @@ class FSDPParamGroup:
 
     def finalize_backward(self):
         if self._post_reduce_view_out_event is not None:
-            torch.cuda.current_stream().wait_event(self._post_reduce_view_out_event)
+            if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+                torch.cuda.current_stream().wait_event(self._post_reduce_view_out_event)
             self._post_reduce_view_out_event = None
         self._training_state = TrainingState.IDLE
         self._post_forward_indices.clear()
-        self.all_forward_output_grad_fns.clear()
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            self.all_forward_output_grad_fns.clear()
 
     def _prefetch_unshard(self):
         if self._training_state == TrainingState.PRE_BACKWARD:
@@ -354,17 +366,22 @@ class FSDPParamGroup:
             if (target_index := curr_index - 1) < 0:
                 return
             target_fsdp_param_group = self.comm_ctx.post_forward_order[target_index]
-            if any(
+            # NOTE(yf225): since compile doesn't support `t.grad_fn` access or `torch._C._will_engine_execute_node()` yet,
+            # when compile, we always do unshard and rely on Inductor DCE to remove the unnecessary ops
+            # NOTE(yf225): unfortunately we can't use `.use_training_state()` ctx manager because Dynamo doesn't support it yet.
+            if torch.distributed._functional_collectives.is_torchdynamo_compiling() or \
+            any(
                 torch._C._will_engine_execute_node(grad_fn)  # type: ignore[attr-defined]
                 for grad_fns in target_fsdp_param_group.all_forward_output_grad_fns
                 for grad_fn in grad_fns
             ):
+                old_training_state = target_fsdp_param_group._training_state
+                target_fsdp_param_group._training_state = TrainingState.PRE_BACKWARD
                 with torch.profiler.record_function(
                     "FSDP::backward_prefetch"
-                ), target_fsdp_param_group.use_training_state(
-                    TrainingState.PRE_BACKWARD
                 ):
                     target_fsdp_param_group.unshard()
+                target_fsdp_param_group._training_state = old_training_state
 
     # Utilities #
     def _to_sharded(self):
@@ -410,6 +427,11 @@ class FSDPParamGroup:
     def _register_post_backward_hook(
         self, args: Tuple[Any, ...], kwargs: Dict[str, Any]
     ) -> Tuple[Tuple[Any, ...], Dict[str, Any]]:
+        # NOTE: we ignore the `RegisterPostBackwardFunction` function in compile, instead we rely on _root_post_backward_final_callback
+        # to call the param_group.post_backward(), and rely on Inductor comm reordering to optimally decide
+        # when to issue prefetch and reshard.
+        if torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            return args, kwargs
         if not torch.is_grad_enabled():
             return args, kwargs
         args_list, args_spec = tree_flatten(args)

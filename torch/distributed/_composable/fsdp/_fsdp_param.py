@@ -135,6 +135,7 @@ class FSDPParam:
         if self.post_forward_mesh_info:
             self._init_sharded_post_forward_param_metadata(param)
         self.all_gather_output = torch.empty(0)
+        self.all_gather_output_storage_size = None
         self._param_fqn: Optional[str] = None  # prefixed from root module
 
     @torch.no_grad()
@@ -249,6 +250,7 @@ class FSDPParam:
         self.all_gather_output = torch.empty(
             all_gather_output_size, dtype=dtype, device=device
         )
+        self.all_gather_output_storage_size = self.all_gather_output.numel() * self.all_gather_output.itemsize
 
     def init_unsharded_param(self):
         if hasattr(self, "_unsharded_param"):
@@ -262,13 +264,22 @@ class FSDPParam:
             storage_offset=0,
         )
         if self.is_dtensor:
-            unsharded_param = _from_local_no_grad(
-                unsharded_param,
-                self._tp_spec.mesh,
-                self._tp_spec.placements,
-                self._global_size,
-                self._global_stride,
-            )
+            if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+                unsharded_param = _from_local_no_grad(
+                    unsharded_param,
+                    self._tp_spec.mesh,
+                    self._tp_spec.placements,
+                    self._global_size,
+                    self._global_stride,
+                )
+            else:
+                unsharded_param = DTensor.from_local(
+                    unsharded_param,
+                    self._tp_spec.mesh,
+                    self._tp_spec.placements,
+                    shape=self._global_size,
+                    stride=self._global_stride,
+                )
         self._unsharded_param = nn.Parameter(unsharded_param)
         self._unsharded_param.requires_grad_(self.sharded_param.requires_grad)
 
@@ -292,6 +303,8 @@ class FSDPParam:
             )
         shard_rank = self.post_forward_mesh_info.shard_mesh_rank
         sharded_numel = numel // shard_world_size
+        if torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            raise Exception("NYI(yf225): need to use ._unsharded_param instead of .all_gather_output for compile, to avoid having .all_gather_output as graph input")
         self._sharded_post_forward_param_data = (
             self.all_gather_output.narrow(0, sharded_numel * shard_rank, sharded_numel)
         ).clone()  # clone to be able to free all-gather output
@@ -339,13 +352,23 @@ class FSDPParam:
             _raise_assert_with_print(
                 f"Expects size {self.sharded_size} but got {tensor.shape}"
             )
-        return _from_local_no_grad(
-            tensor,
-            self._global_mesh,
-            self._global_placements,
-            self._global_size,
-            self._global_stride,
-        )
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            ret = _from_local_no_grad(
+                tensor,
+                self._global_mesh,
+                self._global_placements,
+                self._global_size,
+                self._global_stride,
+            )
+        else:
+            ret = DTensor.from_local(
+                tensor,
+                self._global_mesh,
+                self._global_placements,
+                shape=self._global_size,
+                stride=self._global_stride,
+            )
+        return ret
 
     def to_sharded_post_forward_dtensor(self, tensor: torch.Tensor) -> DTensor:
         if tensor.shape != self.sharded_post_forward_size:
@@ -355,19 +378,38 @@ class FSDPParam:
         assert isinstance(self.post_forward_mesh_info, HSDPMeshInfo)
         # TODO: Prefer this DTensor to be read-only and generalize the
         # placement once we support TP.
-        return _from_local_no_grad(
-            tensor,
-            self.post_forward_mesh_info.mesh,
-            (Replicate(), Shard(0)),
-            self._global_size,
-            self._global_stride,
-        )
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            ret = _from_local_no_grad(
+                tensor,
+                self.post_forward_mesh_info.mesh,
+                (Replicate(), Shard(0)),
+                self._global_size,
+                self._global_stride,
+            )
+        else:
+            ret = DTensor.from_local(
+                tensor,
+                self.post_forward_mesh_info.mesh,
+                (Replicate(), Shard(0)),
+                shape=self._global_size,
+                stride=self._global_stride,
+            )
+        return ret
 
     def alloc_all_gather_output(self) -> None:
-        unsafe_alloc_storage(self.all_gather_output)
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            unsafe_alloc_storage(self.all_gather_output, self.all_gather_output_storage_size)
+        else:
+            unsafe_alloc_storage(self._unsharded_param, self.all_gather_output_storage_size)
 
     def free_all_gather_output(self) -> None:
-        unsafe_free_storage(self.all_gather_output)
+        # These two branches do the exact same thing underneath,
+        # because .all_gather_output and ._unsharded_param share the same storage.
+        # We use ._unsharded_param under compile just to avoid having .all_gather_output as graph input.
+        if not torch.distributed._functional_collectives.is_torchdynamo_compiling():
+            unsafe_free_storage(self.all_gather_output)
+        else:
+            unsafe_free_storage(self._unsharded_param)
 
     @property
     def all_gather_input(self) -> torch.Tensor:  # 1D
@@ -415,10 +457,10 @@ class FSDPParam:
 # NOTE: Unsafe here refers to not checking whether the storage is already
 # allocated or freed, respectively. We should be safe to use them since we
 # explicitly manage the state transition.
-def unsafe_alloc_storage(tensor: torch.Tensor) -> None:
+def unsafe_alloc_storage(tensor: torch.Tensor, new_size: int) -> None:
     # Skip the already-allocated check and assume that `tensor` is the base
     # tensor to save CPU overhead
-    tensor.untyped_storage().resize_(tensor.numel() * tensor.itemsize)
+    tensor.untyped_storage().resize_(new_size)
 
 
 def unsafe_free_storage(tensor: torch.Tensor) -> None:

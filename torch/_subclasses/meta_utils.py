@@ -476,13 +476,34 @@ class MetaConverter:
     def set_tensor_memo(self, t: MetaTensorDesc, v):
         self.tensor_memo[t.id] = v
 
-    def get_storage_memo(self, s: MetaStorageDesc):
-        return self.storage_memo.get(s.id, None)
+    def get_storage_memo(self, s):
+        return self.storage_memo.get(WeakIdRef(s), None)
 
-    def set_storage_memo(self, s: MetaStorageDesc, v):
-        self.storage_memo[s.id] = v
+    def set_storage_memo(self, s, v):
+        # hold a weak ref to self, otherwise it will be kept alive
+        # by the del_ten closure
+        self_weak_ref = weakref.ref(self)
+        storage_ref_key = WeakIdRef(s)
 
+        def del_storage():
+            # tensor outlives the converter
+            self_ref = self_weak_ref()
+            if self_ref is None:
+                return
+            # on shutdown, tensor_ref_key may not be in memo
+            self_ref.storage_memo.pop(storage_ref_key, None)
+
+        weakref.finalize(s, del_storage)
+        # If we are fakeifying a tensor that has a secretly-zero-sized storage,
+        # Need to make sure to resize the meta storage too.
+        if s.size() == 0:
+            v.resize_(0)
+        self.storage_memo[storage_ref_key] = v
+
+    # NB: doesn't actually return a storage, because meta storage is
+    # not supported
     def meta_storage(self, s: MetaStorageDesc, callback):
+        # Use a Weak Ref to s in order to not leak memory
         if self.get_storage_memo(s) is None:
             r_s = callback(
                 lambda: torch.empty(s.size, dtype=torch.uint8, device="meta")
