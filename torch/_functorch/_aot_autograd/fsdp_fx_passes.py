@@ -200,6 +200,8 @@ def remove_unnecessary_split_with_sizes(mod):
 def replace_foreach_all_gather_copy_out_pattern(mod):
     """
     TODO(yf225): in eager code, can we replace this entire pattern with an ATen op? e.g. https://github.com/pytorch/pytorch/pull/121081. Simplest is just to add a C++ version.
+    The eager version is just `split_with_sizes_out` now, but it actually does more operations than needed. Step 1: write a C++ op just for compile. Step 2: look at unifying eager and compile implementation.
+
     NOTE: this pattern is from `foreach_all_gather_copy_out` in ppFSDP:
     ```
     ... = dist.all_gather_into_tensor(...)  # in another function
