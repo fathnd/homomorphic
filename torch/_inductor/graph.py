@@ -287,6 +287,8 @@ class GraphLowering(torch.fx.Interpreter):
         self.creation_time = time.time()
         self.name = name
         self.cpp_wrapper = cpp_wrapper
+        self.foreach_tbs: Set[int] = set()
+        self.realize_all_users: Set[str] = set()
 
         # record multi_kernel choice for cpp_wrapper so the second pass knows
         # which sub-kernel is picked. Copy cpp_wrapper to another variable
@@ -650,8 +652,18 @@ class GraphLowering(torch.fx.Interpreter):
                 ):
                     return
 
-                for read_name in value.get_read_names():
-                    self.name_to_users[read_name].append(value)
+                if (
+                    not (
+                        isinstance(value, TensorBox)
+                        and isinstance(value.data, ir.StorageBox)
+                        and isinstance(value.data.data, ir.InputBuffer)
+                    )
+                    # and id(value) not in self.foreach_tbs
+                ):
+                    for read_name in value.get_read_names():
+                        self.name_to_users[read_name].append(value)
+                        if id(value) not in self.foreach_tbs:
+                            self.realize_all_users.add(read_name)
 
         register(node_output)
 
@@ -660,14 +672,20 @@ class GraphLowering(torch.fx.Interpreter):
         When a buffer is mutated we need to make sure all the reads to
         the old version are realized before the mutation happens.
         """
+        # print(f"mark_buffer_mutated {name}")
         assert isinstance(name, str)
         self.mutated_buffers.add(name)
 
         if name not in self.name_to_users:
             return
 
-        for user in self.name_to_users[name]:
-            user.realize()
+        # print(self.foreach_tbs)
+        # print([id(user) for user in self.name_to_users[name]])
+        # print([user for user in self.name_to_users[name] if id(user) not in self.foreach_tbs])
+        if name in self.realize_all_users:
+            for user in self.name_to_users[name]:
+                # if id(user) not in self.foreach_tbs:
+                user.realize()
 
     def add_tensor_constant(self, data, name=None):
         def allocate(name):
