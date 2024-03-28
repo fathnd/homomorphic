@@ -39,6 +39,8 @@ _side_effectful_need_to_be_preserved_pre_dispatch: Set[Callable] = {
     torch.amp._exit_autocast,
 }
 
+# TODO: Either refactor this into 2 functions 1 dce for functional graphs and 1 dce for all graphs,
+# or add logic to correctly mark all inplace ops as side effectful.
 _side_effectful_functions: Set[Callable] = {
     torch._assert,
     torch._assert_async,
@@ -46,7 +48,9 @@ _side_effectful_functions: Set[Callable] = {
     _ops.aten._assert_scalar.default,
     _ops.aten.copy_.default,
     # need this otherwise _foreach_copy_ added by our custom FX pass will be DCE'ed away.
+    # TODO(yf225): try remove this and see what happens
     _ops.aten._foreach_copy_.default,
+    _ops.aten.index_put_.default,
     _ops.aten.sym_constrain_range.default,
     _ops.aten.sym_constrain_range_for_size.default,
     _ops.profiler._record_function_enter,
