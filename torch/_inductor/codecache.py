@@ -913,7 +913,7 @@ class CompiledFxGraph:
     device_idxs: Set[int]
     mutated_inputs: Set[str]
     mutated_input_idxs: Set[int]
-    constants: Dict[str, torch.Tensor]
+    constants: Dict[str, Union[torch.Tensor, torch._C.ScriptObject]]
     output_strides: Optional[List[Optional[Tuple[int, ...]]]]
     disabled_cudagraphs_reason: Optional[str]
     metrics_deltas: metrics.CachedMetricsDeltas
@@ -1790,6 +1790,7 @@ class AotCodeCompiler:
                 tensor.untyped_storage().nbytes()
                 for (name, tensor) in graph.constants.items()
                 if name not in graph.folded_constants
+                and isinstance(tensor, torch.Tensor)
             )
             # TODO: Fix mmap weights with cuda
             use_mmap_weights = (
