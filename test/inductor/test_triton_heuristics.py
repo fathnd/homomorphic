@@ -5,7 +5,7 @@ import unittest
 
 import torch
 
-from torch.testing._internal.common_utils import IS_LINUX
+from torch.testing._internal.common_utils import IS_LINUX, serialTest
 from torch.testing._internal.inductor_utils import HAS_GPU
 
 try:
@@ -70,6 +70,7 @@ class TestTritonHeuristics(TestCase):
         self.assertEqual(forward(*args), foo_c(*args))
 
     @unittest.skip("https://github.com/pytorch/pytorch/issues/123210")
+    @serialTest()
     def test_artificial_zgrid(self):
         self._test_artificial_zgrid()
 
@@ -79,6 +80,7 @@ class TestTritonHeuristics(TestCase):
         self._test_artificial_zgrid()
 
     @config.patch("triton.max_tiles", 3)
+    @serialTest()
     def test_artificial_grid_max_tiles(self):
         with self.assertRaisesRegex(Exception, "Generated y grid"):
             self._test_artificial_zgrid()

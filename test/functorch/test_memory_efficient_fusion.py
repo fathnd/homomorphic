@@ -12,7 +12,7 @@ from functorch import make_fx
 from functorch.compile import memory_efficient_fusion
 from torch._functorch.compile_utils import fx_graph_cse
 from torch.nn import functional as F
-from torch.testing._internal.common_utils import run_tests, TestCase
+from torch.testing._internal.common_utils import TestCase, run_tests, serialTest, TEST_CUDA
 
 HAS_CUDA = torch.cuda.is_available()
 
@@ -156,6 +156,7 @@ class TestMemoryEfficientOpAuthoring(TestCase):
         layer_norm_inps = [(bs, ln_size), (ln_size,), (ln_size,)]
         run_and_compare_activation(self, layer_norm, layer_norm_inps)
 
+    @serialTest(TEST_CUDA)
     def test_rmsnorm(self):
         class T5LayerNorm(nn.Module):
             def __init__(self, hidden_size, eps=1e-6):

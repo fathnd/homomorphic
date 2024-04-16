@@ -17,7 +17,6 @@ import torch.nn.functional as F
 from torch import inf, nan
 from torch.autograd import gradcheck, gradgradcheck
 from torch.testing import make_tensor
-from torch.testing._internal.common_cuda import TEST_CUDA
 from torch.testing._internal.common_device_type import (
     dtypes,
     dtypesIfCUDA,
@@ -41,11 +40,13 @@ from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize as parametrize_test,
     run_tests,
+    serialTest,
     set_default_dtype,
     skipIfMps,
     skipIfTorchDynamo,
     slowTest,
     subtest,
+    TEST_CUDA,
     TEST_WITH_UBSAN,
     TestCase,
 )
@@ -930,6 +931,7 @@ torch.cuda.synchronize()
     @gcIfJetson
     @dtypes(torch.float, torch.double)
     @dtypesIfCUDA(torch.half, torch.float, torch.double)
+    @serialTest(TEST_CUDA)
     def test_avg_pool2d_nhwc(self, device, dtype):
         def helper(
             n,
@@ -1077,6 +1079,7 @@ torch.cuda.synchronize()
     @dtypes(torch.half, torch.bfloat16, torch.float, torch.double)
     @dtypesIfCUDA(torch.half, torch.float, torch.double)
     @gcIfJetson
+    @serialTest(TEST_CUDA)
     def test_max_pool2d_nhwc(self, device, dtype):
         def helper(n, c, h, w, kernel_size, stride=None):
             if stride is None:
@@ -1821,6 +1824,7 @@ torch.cuda.synchronize()
 
     @onlyCUDA
     @largeTensorTest("6GB")
+    @serialTest()
     def test_pooling_large(self, device):
         def helper(pool):
             inp = torch.randn(
