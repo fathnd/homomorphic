@@ -656,7 +656,7 @@ class CachingAutotuner(KernelInterface):
                     v,
                     k.n_regs,
                     k.n_spills,
-                    k.shared,
+                    k.metadata.shared if hasattr(k.metadata, "shared") else k.shared,
                 )
 
         return timings
