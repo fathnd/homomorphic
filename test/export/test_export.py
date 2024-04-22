@@ -3988,6 +3988,33 @@ def forward(self, b_t, x, y):
         ][0]
         self.assertEqual(op_node.target._name, "aten::add.Tensor")
 
+    def test_dropout(self):
+        class M(torch.nn.Module):
+            def forward(self, x):
+                return torch.nn.functional.dropout(x, p=0.5, training=True, inplace=True)
+
+        ep = torch.export._trace._export(M(), (torch.ones(4),), {}, pre_dispatch=True)
+        self.assertExpectedInline(
+            str(ep.graph_module.code.strip()),
+            """\
+def forward(self, arg0_1):
+    dropout = torch.ops.aten.dropout.default(arg0_1, 0.5, True)
+    copy = torch.ops.aten.copy.default(arg0_1, dropout);  arg0_1 = dropout = None
+    return (copy, copy)"""
+        )
+
+        ep_aot_dispatch = export(M(), (torch.ones(4),), {})
+
+        self.assertExpectedInline(
+            str(ep_aot_dispatch.graph_module.code.strip()),
+            """\
+def forward(self, arg0_1):
+    native_dropout = torch.ops.aten.native_dropout.default(arg0_1, 0.5, True)
+    getitem = native_dropout[0];  native_dropout = None
+    copy = torch.ops.aten.copy.default(arg0_1, getitem);  arg0_1 = getitem = None
+    return (copy, copy)"""
+        )
+
     def test_non_persistent_buffer(self):
         class MyModule(torch.nn.Module):
             def __init__(self):
