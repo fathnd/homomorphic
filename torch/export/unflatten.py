@@ -161,9 +161,16 @@ class UnflattenedModule(torch.nn.Module):
         self.range_constraints = export_module.range_constraints
         self.equality_constraints: List = []
 
+        # handle weight-sharing, only clone once
+        id_to_params: Dict[int, torch.nn.Parameter] = {}
         state_dict = export_module.state_dict
         for name in self.graph_signature.parameters:
-            cloned = torch.nn.Parameter(state_dict[name].clone())
+            param = state_dict[name]
+            if id(param) in id_to_params:
+                cloned = id_to_params[id(param)]
+            else:
+                cloned = torch.nn.Parameter(param.clone())
+                id_to_params[id(param)] = cloned
             _assign_attr(
                 cloned,
                 self,
@@ -171,14 +178,21 @@ class UnflattenedModule(torch.nn.Module):
                 attr_kind=_AttrKind.PARAMETER,
             )
 
+        id_to_buffers: Dict[int, torch.nn.Parameter] = {}
         non_persistent_buffers = set(self.graph_signature.non_persistent_buffers)
         for name in self.graph_signature.buffers:
             if name in non_persistent_buffers:
                 persistent = False
-                cloned = export_module.constants[name].clone()
+                buffer = export_module.constants[name]
             else:
                 persistent = True
-                cloned = state_dict[name].clone()
+                buffer = state_dict[name]
+
+            if id(buffer) in id_to_buffers:
+                cloned = id_to_buffers[id(buffer)]
+            else:
+                cloned = buffer.clone()
+                id_to_buffers[id(buffer)] = cloned
 
             _assign_attr(
                 cloned,
@@ -209,7 +223,7 @@ class UnflattenedModule(torch.nn.Module):
             **self.graph_signature.inputs_to_lifted_custom_objs,
         }
 
-        _sink_params(self, inputs_to_state, [])
+        _sink_params(self, self, inputs_to_state, [])
         # Check all input nodes has been processed.
         for module in self.modules():
             if not isinstance(module, torch.fx.GraphModule):
@@ -541,9 +555,11 @@ class _ModuleFrame:
             _add_submodule(
                 parent.module,
                 accessor,
-                self.module
-                if self.cached_graph_module is None
-                else self.cached_graph_module,
+                (
+                    self.module
+                    if self.cached_graph_module is None
+                    else self.cached_graph_module
+                ),
             )
             self.parent_call_module = parent.graph.call_module(accessor)
 
@@ -572,9 +588,11 @@ class _ModuleFrame:
                         op="call_function",
                         target=operator.getitem,
                         args=(flat_args, idx),
-                        name=arg.name
-                        if not isinstance(arg, ConstantArgument)
-                        else f"_constant_{idx}",
+                        name=(
+                            arg.name
+                            if not isinstance(arg, ConstantArgument)
+                            else f"_constant_{idx}"
+                        ),
                     )
                     if isinstance(arg, ConstantArgument):
                         continue
@@ -845,6 +863,7 @@ def _reorder_submodules(
 
 
 def _sink_params(
+    root_module: torch.nn.Module,
     module: torch.nn.Module,
     inputs_to_state: Dict[str, str],
     scope: List[str],
@@ -865,7 +884,12 @@ def _sink_params(
     # We need to use _modules here instead of named_children(), because we
     # explicitly want duplicate modules to show up in the traversal.
     for name, submodule in module._modules.items():
-        _sink_params(cast(torch.nn.Module, submodule), inputs_to_state, scope + [name])
+        _sink_params(
+            root_module,
+            cast(torch.nn.Module, submodule),
+            inputs_to_state,
+            scope + [name],
+        )
 
     if not hasattr(module, "graph"):
         # Not all modules have graphs defined, if they are empty modules with no operations (like ParameterList)
@@ -893,12 +917,12 @@ def _sink_params(
             # To make sure this always happen, we should enforce the invariant that no placeholder node
             # in the unflattened graph appears in inputs_to_state dict, which means all the extra input
             # nodes have been handled.
+
             if state_name[: len(scope)] != scope:
                 continue
             attr_path = state_name[len(scope) :]
             state_attr = _recursive_getattr(module, attr_path)
             assert isinstance(state_attr, (torch.Tensor, torch.ScriptObject))
-
             # Make sure the newly created get_attr node is placed after the last placeholder node
             with graph.inserting_after(the_last_input):
                 new_node = graph.create_node("get_attr", ".".join(attr_path))
