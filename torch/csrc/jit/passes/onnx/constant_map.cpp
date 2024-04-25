@@ -39,6 +39,14 @@ c10::optional<size_t> ConstantValueMap::GetRank(const std::string& tensorName) {
   return ConstantValueMap::getInstance().rankMap[tensorName];
 }
 
+void ConstantValueMap::SetAllGraphInputsReliableComputed(bool computed) {
+  ConstantValueMap::getInstance().allGraphInputsReliableComputed = computed;
+}
+
+bool ConstantValueMap::GetAllGraphInputsReliableComputed() {
+  return ConstantValueMap::getInstance().allGraphInputsReliableComputed;
+}
+
 void ConstantValueMap::SetShape(
     const std::string& tensorName,
     const c10::SymbolicShape& shapeValue) {
@@ -262,6 +270,7 @@ void ConstantValueMap::ClearMaps() {
   ConstantValueMap::getInstance().shapeValueMap.clear();
   ConstantValueMap::getInstance().inferredShapeData.clear();
   ConstantValueMap::getInstance().symbolDimMap.clear();
+  ConstantValueMap::getInstance().allGraphInputsReliableComputed = false;
 }
 
 // For debug only.
