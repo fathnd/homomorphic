@@ -362,9 +362,9 @@ def _single_tensor_nadam(
 
         # If compiling, the compiler will handle cudagraph checks, see note [torch.compile x capturable]
         if not torch._utils.is_compiling() and capturable:
-            assert (param.is_cuda and mu_product.is_cuda and step_t.is_cuda) or (
-                param.is_xla and mu_product.is_xla and step_t.is_xla
-            ), "If capturable=True, params, mu_products, and state_steps must be CUDA or XLA tensors."
+            assert (
+                param.device == mu_product.device == step_t.device
+            ), "If capturable=True, params, mu_products, and state_steps must be on the same device."
 
         # update step
         step_t += 1
@@ -443,9 +443,9 @@ def _multi_tensor_nadam(
     # If compiling, the compiler will handle cudagraph checks, see note [torch.compile x capturable]
     if not torch._utils.is_compiling() and capturable:
         assert all(
-            p.is_cuda and mp.is_cuda and step.is_cuda
+            p.device == mp.device == step.device
             for p, mp, step in zip(params, mu_products, state_steps)
-        ), "If capturable=True, params, mu_products, and state_steps must be CUDA tensors."
+        ), "If capturable=True, params, mu_products, and state_steps must be on the same device."
 
     grouped_tensors = Optimizer._group_tensors_by_device_and_dtype(
         [params, grads, exp_avgs, exp_avg_sqs, mu_products, state_steps]

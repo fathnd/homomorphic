@@ -304,9 +304,9 @@ def _single_tensor_adamax(
 
         # If compiling, the compiler will handle cudagraph checks, see note [torch.compile x capturable]
         if not torch._utils.is_compiling() and capturable:
-            assert (param.is_cuda and step_t.is_cuda) or (
-                param.is_xla and step_t.is_xla
-            ), "If capturable=True, params and state_steps must be CUDA or XLA tensors."
+            assert (
+                param.device == step_t.device
+            ), "If capturable=True, params and state_steps must be on the same device."
 
         # update step
         step_t += 1
@@ -376,10 +376,10 @@ def _multi_tensor_adamax(
     if (
         not torch._utils.is_compiling()
         and capturable
-        and not all(p.is_cuda and step.is_cuda for p, step in zip(params, state_steps))
+        and not all(p.device == step.device for p, step in zip(params, state_steps))
     ):
         raise RuntimeError(
-            "If capturable=True, params and state_steps must be CUDA tensors."
+            "If capturable=True, params and state_steps must be on the same device."
         )
 
     grouped_tensors = Optimizer._group_tensors_by_device_and_dtype(

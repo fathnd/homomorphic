@@ -341,9 +341,9 @@ def _single_tensor_rmsprop(
 
         # If compiling, the compiler will handle cudagraph checks, see note [torch.compile x capturable]
         if not torch._utils.is_compiling() and capturable:
-            assert (param.is_cuda and step.is_cuda) or (
-                param.is_xla and step.is_xla
-            ), "If capturable=True, params and state_steps must be CUDA or XLA tensors."
+            assert (
+                param.device == step.device
+            ), "If capturable=True, params and state_steps must be on the same device."
 
         grad = grads[i]
         grad = grad if not maximize else -grad
@@ -413,9 +413,8 @@ def _multi_tensor_rmsprop(
     # If compiling, the compiler will handle cudagraph checks, see note [torch.compile x capturable]
     if not torch._utils.is_compiling() and capturable:
         assert all(
-            (p.is_cuda and step.is_cuda) or (p.is_xla and step.is_xla)
-            for p, step in zip(params, state_steps)
-        ), "If capturable=True, params and state_steps must be CUDA tensors."
+            p.device == step.device for p, step in zip(params, state_steps)
+        ), "If capturable=True, params and state_steps must be on the same device."
 
     grouped_tensors = Optimizer._group_tensors_by_device_and_dtype(
         [params, grads, square_avgs, grad_avgs, momentum_buffer_list, state_steps]

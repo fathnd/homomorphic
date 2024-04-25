@@ -310,8 +310,8 @@ def _single_tensor_adadelta(
     # If compiling, the compiler will handle cudagraph checks, see note [torch.compile x capturable]
     if not torch._utils.is_compiling() and capturable:
         assert all(
-            p.is_cuda and step.is_cuda for p, step in zip(params, state_steps)
-        ), "If capturable=True, params and state_steps must be CUDA tensors."
+            p.device == step.device for p, step in zip(params, state_steps)
+        ), "If capturable=True, params and state_steps must be on the same device."
 
     for param, grad, square_avg, acc_delta, step in zip(
         params, grads, square_avgs, acc_deltas, state_steps
@@ -361,8 +361,8 @@ def _multi_tensor_adadelta(
     # If compiling, the compiler will handle cudagraph checks, see note [torch.compile x capturable]
     if not torch._utils.is_compiling() and capturable:
         assert all(
-            p.is_cuda and step.is_cuda for p, step in zip(params, state_steps)
-        ), "If capturable=True, params and state_steps must be CUDA tensors."
+            p.device == step.device for p, step in zip(params, state_steps)
+        ), "If capturable=True, params and state_steps must be on the same device."
 
     if len(params) == 0:
         return
