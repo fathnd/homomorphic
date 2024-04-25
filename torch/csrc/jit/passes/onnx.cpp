@@ -169,8 +169,14 @@ std::shared_ptr<Graph> ToONNX(
   ConstantValueMap::ClearMaps();
   auto new_graph = std::make_shared<Graph>(graph->current_scope());
   std::unordered_map<Value*, Value*> env;
+  py::set values_in_env;
   try {
-    BlockToONNX(graph->block(), new_graph->block(), operator_export_type, env);
+    BlockToONNX(
+        graph->block(),
+        new_graph->block(),
+        operator_export_type,
+        env,
+        values_in_env);
   } catch (std::runtime_error& ex) {
     ONNX_LOG(
         "ONNX graph being constructed during exception:\n",
@@ -192,6 +198,7 @@ std::unordered_map<Value*, Value*> BlockToONNX(
     Block* new_block,
     ::torch::onnx::OperatorExportTypes operator_export_type,
     std::unordered_map<Value*, Value*>& env,
+    py::set& values_in_env,
     bool is_sub_block) {
   torch::autograd::SymbolicContext ctx{};
   ctx.block = new_block;
@@ -205,12 +212,13 @@ std::unordered_map<Value*, Value*> BlockToONNX(
     for (auto input : old_block->inputs()) {
       auto n = ctx.block->addInput()->copyMetadata(input);
       env[input] = n;
+      values_in_env.add(py::cast(n));
     }
   }
 
   // Finally, visit all nodes in the graph
   for (auto node : old_block->nodes()) {
-    NodeToONNX(node, ctx.block, operator_export_type, env);
+    NodeToONNX(node, ctx.block, operator_export_type, env, values_in_env);
   }
 
   if (is_sub_block) {
@@ -241,7 +249,8 @@ void NodeToONNX(
     Node* old_node,
     Block* new_block,
     ::torch::onnx::OperatorExportTypes operator_export_type,
-    std::unordered_map<Value*, Value*>& env) {
+    std::unordered_map<Value*, Value*>& env,
+    py::set& values_in_env) {
   py::object onnx = py::module::import("torch.onnx");
   py::object onnx_globals = py::module::import("torch.onnx._globals");
   py::object onnx_registration =
@@ -280,12 +289,7 @@ void NodeToONNX(
     for (const auto i : c10::irange(num_old_outputs)) {
       auto old = old_outputs[i];
       if (outputs[i]) {
-        bool exist_in_env =
-            (env.end() !=
-             std::find_if(
-                 env.begin(), env.end(), [&outputs, i](const auto& vt) {
-                   return vt.second == outputs[i];
-                 }));
+        bool exist_in_env = values_in_env.contains(py::cast(outputs[i]));
         // Update ONNX value debug name with ATen value debug name if existed.
         // Skip if ONNX value already exist in environment.
         // This implies the op is a noop, and the value is owned by
@@ -326,6 +330,7 @@ void NodeToONNX(
           new_block->appendNode(const_node);
           ONNXShapeTypeInference(const_node, empty_params_dict, opset_version);
           env[old] = const_node->output();
+          values_in_env.add(py::cast(const_node->output()));
         } else {
           // An update in ConstantValueMap is also needed here, since
           // the user setType can be only accessed in this step, and it
@@ -349,6 +354,7 @@ void NodeToONNX(
             outputs[i]->node()->copyMetadata(node);
           }
           env[old] = outputs[i];
+          values_in_env.add(py::cast(outputs[i]));
         }
       } else {
         // Null output means that the ONNX op doesn't have outputs corresponding
@@ -373,7 +379,9 @@ void NodeToONNX(
         new_block->owningGraph()->createClone(node, envFn));
     for (const auto i : c10::irange(node->outputs().size())) {
       // n_->outputs()[i]->setType(node->outputs()[i]->type());
-      env[node->output(i)] = n_->output(i);
+      Value* value = n_->output(i);
+      env[node->output(i)] = value;
+      values_in_env.add(py::cast(value));
     }
   };
 
@@ -381,13 +389,17 @@ void NodeToONNX(
   auto inlineAutograd = [&](Node* PythonOpNode) {
     for (auto subblock : PythonOpNode->blocks()) {
       for (const auto i : c10::irange(PythonOpNode->inputs().size())) {
-        env[subblock->inputs()[i]] = env[PythonOpNode->inputs()[i]];
+        Value* value = env[PythonOpNode->inputs()[i]];
+        env[subblock->inputs()[i]] = value;
+        values_in_env.add(py::cast(value));
       }
       for (auto* node : subblock->nodes()) {
-        NodeToONNX(node, new_block, operator_export_type, env);
+        NodeToONNX(node, new_block, operator_export_type, env, values_in_env);
       }
       for (const auto i : c10::irange(PythonOpNode->outputs().size())) {
-        env[PythonOpNode->outputs()[i]] = env[subblock->outputs()[i]];
+        Value* value = env[subblock->outputs()[i]];
+        env[PythonOpNode->outputs()[i]] = value;
+        values_in_env.add(py::cast(value));
       }
     }
   };
@@ -443,6 +455,7 @@ void NodeToONNX(
         n,
         py_inputs,
         env,
+        values_in_env,
         new_nodes,
         operator_export_type);
 
@@ -573,6 +586,7 @@ void NodeToONNX(
           n,
           py_symbolic_args,
           env,
+          values_in_env,
           new_nodes,
           operator_export_type);
 
