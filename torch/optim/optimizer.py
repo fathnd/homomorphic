@@ -52,6 +52,11 @@ __all__ = [
 _global_optimizer_pre_hooks: Dict[int, GlobalOptimizerPreHook] = OrderedDict()
 _global_optimizer_post_hooks: Dict[int, GlobalOptimizerPostHook] = OrderedDict()
 _foreach_supported_types = [torch.Tensor, torch.nn.parameter.Parameter]
+_supported_capturable_devices: List[str] = [
+    "cuda",
+    "xla",
+    torch._C._get_privateuse1_backend_name(),
+]
 
 
 class _RequiredParameter:

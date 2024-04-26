@@ -11,6 +11,7 @@ from .optimizer import (
     _get_scalar_dtype,
     _get_value,
     _maximize_doc,
+    _supported_capturable_devices,
     _use_grad_for_differentiable,
     _view_as_real,
     Optimizer,
@@ -273,8 +274,12 @@ def _single_tensor_asgd(
         # If compiling, the compiler will handle cudagraph checks, see note [torch.compile x capturable]
         if not torch._utils.is_compiling() and capturable:
             assert (
-                param.device == mu.device == eta.device == step_t.device
-            ), "If capturable=True, params, mus, etas, and state_steps must be on the same device."
+                param.device.type
+                == mu.device.type
+                == eta.device.type
+                == step_t.device.type
+                and param.device.type in _supported_capturable_devices
+            ), f"If capturable=True, params, mus, etas, and state_steps must be on supported devices: {_supported_capturable_devices}."
 
         if torch.is_complex(param):
             grad = torch.view_as_real(grad)
@@ -338,9 +343,10 @@ def _multi_tensor_asgd(
     # If compiling, the compiler will handle cudagraph checks, see note [torch.compile x capturable]
     if not torch._utils.is_compiling() and capturable:
         assert all(
-            p.device == mu.device == eta.device == step.device
+            p.device.type == mu.device.type == eta.device.type == step.device.type
+            and p.device.type in _supported_capturable_devices
             for p, mu, eta, step in zip(params, mus, etas, state_steps)
-        ), "If capturable=True, params, mus, etas, and state_steps must be on the same device."
+        ), f"If capturable=True, params, mus, etas, and state_steps must be on supported devices: {_supported_capturable_devices}."
 
     grouped_tensors = Optimizer._group_tensors_by_device_and_dtype(
         [params, grads, axs, mus, etas, state_steps]

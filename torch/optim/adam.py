@@ -14,6 +14,7 @@ from .optimizer import (
     _get_value,
     _maximize_doc,
     _stack_if_compiling,
+    _supported_capturable_devices,
     _use_grad_for_differentiable,
     _view_as_real,
     Optimizer,
@@ -440,8 +441,9 @@ def _single_tensor_adam(
         # If compiling, the compiler will handle cudagraph checks, see note [torch.compile x capturable]
         if not torch._utils.is_compiling() and capturable:
             assert (
-                param.device == step_t.device
-            ), "If capturable=True, params and state_steps must be on the same device."
+                param.device.type == step_t.device.type
+                and param.device.type in _supported_capturable_devices
+            ), f"If capturable=True, params and state_steps must be on supported devices: {_supported_capturable_devices}."
 
         # update step
         step_t += 1
@@ -551,8 +553,10 @@ def _multi_tensor_adam(
     # If compiling, the compiler will handle cudagraph checks, see note [torch.compile x capturable]
     if not torch._utils.is_compiling() and capturable:
         assert all(
-            p.device == step.device for p, step in zip(params, state_steps)
-        ), "If capturable=True, params and state_steps must be on the same device."
+            p.device.type == step.device.type
+            and p.device.type in _supported_capturable_devices
+            for p, step in zip(params, state_steps)
+        ), f"If capturable=True, params and state_steps must be on supported devices: {_supported_capturable_devices}."
 
     assert grad_scale is None and found_inf is None
 
