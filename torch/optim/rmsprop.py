@@ -7,9 +7,9 @@ from .optimizer import (
     _default_to_fused_or_foreach,
     _differentiable_doc,
     _foreach_doc,
+    _get_capturable_supported_devices,
     _get_scalar_dtype,
     _maximize_doc,
-    _supported_capturable_devices,
     _use_grad_for_differentiable,
     _view_as_real,
     Optimizer,
@@ -342,10 +342,11 @@ def _single_tensor_rmsprop(
 
         # If compiling, the compiler will handle cudagraph checks, see note [torch.compile x capturable]
         if not torch._utils.is_compiling() and capturable:
+            capturable_supported_devices = _get_capturable_supported_devices()
             assert (
                 param.device.type == step.device.type
-                and param.device.type in _supported_capturable_devices
-            ), f"If capturable=True, params and state_steps must be on supported devices: {_supported_capturable_devices}."
+                and param.device.type in capturable_supported_devices
+            ), f"If capturable=True, params and state_steps must be on supported devices: {capturable_supported_devices}."
 
         grad = grads[i]
         grad = grad if not maximize else -grad
@@ -414,11 +415,12 @@ def _multi_tensor_rmsprop(
 
     # If compiling, the compiler will handle cudagraph checks, see note [torch.compile x capturable]
     if not torch._utils.is_compiling() and capturable:
+        capturable_supported_devices = _get_capturable_supported_devices()
         assert all(
             p.device.type == step.device.type
-            and p.device.type in _supported_capturable_devices
+            and p.device.type in capturable_supported_devices
             for p, step in zip(params, state_steps)
-        ), f"If capturable=True, params and state_steps must be on supported devices: {_supported_capturable_devices}."
+        ), f"If capturable=True, params and state_steps must be on supported devices: {capturable_supported_devices}."
 
     grouped_tensors = Optimizer._group_tensors_by_device_and_dtype(
         [params, grads, square_avgs, grad_avgs, momentum_buffer_list, state_steps]

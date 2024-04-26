@@ -52,11 +52,6 @@ __all__ = [
 _global_optimizer_pre_hooks: Dict[int, GlobalOptimizerPreHook] = OrderedDict()
 _global_optimizer_post_hooks: Dict[int, GlobalOptimizerPostHook] = OrderedDict()
 _foreach_supported_types = [torch.Tensor, torch.nn.parameter.Parameter]
-_supported_capturable_devices: List[str] = [
-    "cuda",
-    "xla",
-    torch._C._get_privateuse1_backend_name(),
-]
 
 
 class _RequiredParameter:
@@ -171,6 +166,11 @@ def _get_scalar_dtype(is_fused=None):
     return (
         torch.float64 if torch.get_default_dtype() == torch.float64 else torch.float32
     )
+
+
+def _get_capturable_supported_devices() -> List[str]:
+    r"""Return the device type list that supports capturable optimizer."""
+    return ["cuda", "xla", torch._C._get_privateuse1_backend_name()]
 
 
 # Common doc strings among optimizers

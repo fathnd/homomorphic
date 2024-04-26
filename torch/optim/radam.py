@@ -9,9 +9,9 @@ from .optimizer import (
     _differentiable_doc,
     _dispatch_sqrt,
     _foreach_doc,
+    _get_capturable_supported_devices,
     _get_scalar_dtype,
     _get_value,
-    _supported_capturable_devices,
     _use_grad_for_differentiable,
     _view_as_real,
     Optimizer,
@@ -321,10 +321,11 @@ def _single_tensor_radam(
 
         # If compiling, the compiler will handle cudagraph checks, see note [torch.compile x capturable]
         if not torch._utils.is_compiling() and capturable:
+            capturable_supported_devices = _get_capturable_supported_devices()
             assert (
                 param.device.type == step_t.device.type
-                and param.device.type in _supported_capturable_devices
-            ), f"If capturable=True, params and state_steps must be on supported devices: {_supported_capturable_devices}."
+                and param.device.type in capturable_supported_devices
+            ), f"If capturable=True, params and state_steps must be on supported devices: {capturable_supported_devices}."
 
         if torch.is_complex(param):
             param = torch.view_as_real(param)
@@ -417,11 +418,12 @@ def _multi_tensor_radam(
 
     # If compiling, the compiler will handle cudagraph checks, see note [torch.compile x capturable]
     if not torch._utils.is_compiling() and capturable:
+        capturable_supported_devices = _get_capturable_supported_devices()
         assert all(
             p.device.type == step.device.type
-            and p.device.type in _supported_capturable_devices
+            and p.device.type in capturable_supported_devices
             for p, step in zip(params, state_steps)
-        ), f"If capturable=True, params and state_steps must be on supported devices: {_supported_capturable_devices}."
+        ), f"If capturable=True, params and state_steps must be on supported devices: {capturable_supported_devices}."
 
     grouped_tensors = Optimizer._group_tensors_by_device_and_dtype(
         [params, grads, exp_avgs, exp_avg_sqs, state_steps]
