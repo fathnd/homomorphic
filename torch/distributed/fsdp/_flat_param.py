@@ -2172,6 +2172,7 @@ class FlatParamHandle:
             but no longer has the expected flattened shape.
         Returns: ``True`` if some writeback happened, and ``False`` otherwise.
         """
+        from torch.distributed._tensor import DTensor
         if (
             self.uses_sharded_strategy
             and not self.is_sharded(self.flat_param)
@@ -2229,6 +2230,8 @@ class FlatParamHandle:
                     f"Expects to have saved tensor for {flat_param._fqns[i]}",
                 )
             param_changed = getattr(module, param_name) is not param
+            if isinstance(param, DTensor):
+                param = param._local_tensor
             needs_param_writeback = (
                 param_changed  # changed parameter variable itself
                 or not _same_storage(param, flat_param_tensor)
