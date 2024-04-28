@@ -1114,7 +1114,6 @@ def main():
         "sympy",
         "networkx",
         "jinja2",
-        "fsspec",
         'mkl>=2021.1.1,<=2021.4.0; platform_system == "Windows"',
     ]
 
