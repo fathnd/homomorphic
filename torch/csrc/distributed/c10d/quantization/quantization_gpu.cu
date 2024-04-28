@@ -50,10 +50,7 @@ __global__ void _bfloat16_to_float_cuda_kernel(
   }
 }
 
-namespace torch {
-namespace distributed {
-namespace c10d {
-namespace quantization {
+namespace torch::distributed::c10d::quantization {
 
 at::Tensor _float_to_bfloat16_cuda(const at::Tensor& input) {
   TENSOR_ON_CUDA_GPU(input);
@@ -82,7 +79,8 @@ at::Tensor _float_to_bfloat16_cuda(const at::Tensor& input) {
   const auto blockDim_x = std::min(output_columns, threads_per_block);
   dim3 blockDim(blockDim_x, threads_per_block / blockDim_x);
   const auto gridDim_x = (output_columns + blockDim.x - 1) / blockDim.x;
-  const auto gridDim_y = std::min<size_t>((nrows + blockDim.y - 1) / blockDim.y, 65535u);
+  const auto gridDim_y =
+      std::min<size_t>((nrows + blockDim.y - 1) / blockDim.y, 65535u);
   dim3 gridDim(gridDim_x, gridDim_y);
 
   _float_to_bfloat16_cuda_kernel<<<
@@ -96,7 +94,7 @@ at::Tensor _float_to_bfloat16_cuda(const at::Tensor& input) {
       // TODO: replace Half by BFloat16, after BFloat16 is supported by Nvidia
       // NCCL
       reinterpret_cast<uint16_t*>(output.mutable_data_ptr<at::Half>()));
-  //C10_CUDA_KERNEL_LAUNCH_CHECK();
+  // C10_CUDA_KERNEL_LAUNCH_CHECK();
 
   return output;
 }
@@ -126,7 +124,8 @@ at::Tensor _bfloat16_to_float_cuda(const at::Tensor& input) {
   const auto blockDim_x = std::min(output_columns, threads_per_block);
   dim3 blockDim(blockDim_x, threads_per_block / blockDim_x);
   const auto gridDim_x = (output_columns + blockDim.x - 1) / blockDim.x;
-  const auto gridDim_y = std::min<size_t>((nrows + blockDim.y - 1) / blockDim.y, 65535u);
+  const auto gridDim_y =
+      std::min<size_t>((nrows + blockDim.y - 1) / blockDim.y, 65535u);
   dim3 gridDim(gridDim_x, gridDim_y);
 
   _bfloat16_to_float_cuda_kernel<<<
@@ -146,14 +145,11 @@ at::Tensor _bfloat16_to_float_cuda(const at::Tensor& input) {
 }
 
 #define DISPATCH_TO_CUDA(name, function) \
-    m.impl(name, torch::dispatch(c10::DispatchKey::CUDA, TORCH_FN(function)))
+  m.impl(name, torch::dispatch(c10::DispatchKey::CUDA, TORCH_FN(function)))
 
 TORCH_LIBRARY_IMPL(quantization, CUDA, m) {
-    DISPATCH_TO_CUDA("_Bfloat16QuantizedToFloat", _bfloat16_to_float_cuda);
-    DISPATCH_TO_CUDA("_FloatToBfloat16Quantized", _float_to_bfloat16_cuda);
+  DISPATCH_TO_CUDA("_Bfloat16QuantizedToFloat", _bfloat16_to_float_cuda);
+  DISPATCH_TO_CUDA("_FloatToBfloat16Quantized", _float_to_bfloat16_cuda);
 }
 
-} // namespace quantization
-} // namespace c10d
-} // namespace distributed
-} // namespace torch
+} // namespace torch::distributed::c10d::quantization
