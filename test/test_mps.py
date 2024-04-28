@@ -657,8 +657,6 @@ def mps_ops_modifier(ops):
         'cholesky': None,
         'cholesky_inverse': None,
         'cholesky_solve': None,
-        'cummax': None,
-        'cummin': None,
         'erfc': None,
         'frexp': None,
         'gcd': None,
