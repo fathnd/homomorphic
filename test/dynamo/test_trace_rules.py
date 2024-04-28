@@ -11,6 +11,7 @@ from typing import Any, Dict, Set
 import torch
 import torch._dynamo.config as config
 import torch._dynamo.test_case
+import torch._dynamo.testing
 import torch._functorch.deprecated as deprecated_func
 from torch._dynamo.trace_rules import (
     LEGACY_MOD_INLINELIST,
@@ -431,6 +432,22 @@ class TraceRuleTests(torch._dynamo.test_case.TestCase):
             ref = fn(x)
             res = opt_fn(x)
             self.assertEqual(ref, res)
+
+    def test_torch_constant(self):
+        cnt = torch._dynamo.testing.CompileCounter()
+
+        @torch._dynamo.optimize(cnt)
+        def fn():
+            x = torch.rand(3)
+            y = x * int(torch.__version__.split(".")[0])
+            return y
+
+        res = fn()
+        self.assertEqual(
+            cnt.frame_count,
+            1,
+            "unexpected break when accessing python constants in torch.*",
+        )
 
 
 class TestModuleSurviveSkipFiles(torch._dynamo.test_case.TestCase):
