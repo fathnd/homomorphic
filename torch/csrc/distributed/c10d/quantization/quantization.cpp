@@ -49,8 +49,7 @@ at::Tensor _float_to_bfloat16_cpu(const at::Tensor& input) {
   const auto input_sizes = input.sizes();
   const auto nrows = input_sizes[0];
   const auto ncols = input_sizes[1];
-  auto output =
-      at::empty({nrows, ncols}, input.options().dtype(at::kHalf));
+  auto output = at::empty({nrows, ncols}, input.options().dtype(at::kHalf));
 
   FloatToBFloat16Quantized_ref(
       input.const_data_ptr<float>(),
@@ -71,8 +70,8 @@ at::Tensor _bfloat16_to_float_cpu(const at::Tensor& input) {
   const auto ncols = input_sizes[1];
 
   auto output = at::empty(
-      {nrows, ncols}, // 4 = sizeof(float)
-      input.options().dtype(at::kFloat)); //
+      {nrows, ncols},
+      input.options().dtype(at::kFloat));
   BFloat16QuantizedToFloat_ref(
       reinterpret_cast<const at::BFloat16*>(input.const_data_ptr<at::Half>()),
       nrows,
