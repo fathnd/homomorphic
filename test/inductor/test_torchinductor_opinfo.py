@@ -232,6 +232,7 @@ inductor_expected_failures_single_sample["cpu"] = {
         f64,
     },  # NYI: could not find kernel for aten.view.default at dispatch key DispatchKey.SparseCPU
     "view_as_complex": {f16},
+    "bfloat16": {f16},  # scheduler node do not support bf16/fp16 mix"
 }
 
 

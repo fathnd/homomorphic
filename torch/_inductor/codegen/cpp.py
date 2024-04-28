@@ -2553,9 +2553,6 @@ class CppVecKernel(CppKernel):
         if self.tiling_idx >= self.reduction_depth:
             # Horizontal reduction
             if is_welford_reduction(reduction_type):
-                assert (
-                    self._get_num_vectors(dtype) == 1
-                ), "Welford reduction does not support VectorizedN (N>1)"
                 next_value = f"welford_vec_reduce_all({acc_vec})"
             else:
                 reduce_all_body = (
@@ -2584,6 +2581,8 @@ class CppVecKernel(CppKernel):
         out_dtype = V.graph.get_dtype(name)
         # Only float reductions are vectorized currently
         dtype = torch.float
+        out_num_vectors = V.kernel._get_num_vectors(out_dtype)
+        src_num_vectors = V.kernel._get_num_vectors(dtype)
         code = IndentedBuffer()
         if self.tiling_idx >= self.reduction_depth:
             # Horizontal reduction
@@ -2595,9 +2594,15 @@ class CppVecKernel(CppKernel):
             if out_dtype != dtype:
                 if out_dtype in DTYPE_LOWP_FP and dtype == torch.float:
                     _lowp_fp_tmpvar_vec = f"{DTYPE_TO_CPP[out_dtype]}_{value}"
-                    code.writeline(
-                        f"auto {_lowp_fp_tmpvar_vec} = at::vec::convert<{DTYPE_TO_CPP[out_dtype]}>({value});"
-                    )
+                    if src_num_vectors == out_num_vectors == 1:
+                        code.writeline(
+                            f"auto {_lowp_fp_tmpvar_vec} = at::vec::convert<{DTYPE_TO_CPP[out_dtype]}>({value});"
+                        )
+                    else:
+                        code.writeline(
+                            f"auto {_lowp_fp_tmpvar_vec} = at::vec::convert<{DTYPE_TO_CPP[out_dtype]},"
+                            f"{out_num_vectors},{DTYPE_TO_CPP[dtype]},{src_num_vectors}>({value});"
+                        )
                     value = _lowp_fp_tmpvar_vec
                 else:
                     raise AssertionError(
@@ -3149,6 +3154,7 @@ class CppKernelProxy(CppKernel):
         sub_blocks = [scheduler_node._body.root_block] + list(
             scheduler_node._body.subblocks.values()
         )
+        all_node_support_lowp: bool = True
         for sub_block in sub_blocks:
             for _node in sub_block.graph.nodes:
                 # TODO(Eikan): Regarding get_index and index_expr, we should conclude the
@@ -3167,24 +3173,24 @@ class CppKernelProxy(CppKernel):
                     "neg",
                     "output",
                 ]:
-                    return False
+                    all_node_support_lowp = False
 
                 if hasattr(_node, "meta") and _node.meta:
                     assert OptimizationContext.key in _node.meta
                     opt_ctx: OptimizationContext = _node.meta[OptimizationContext.key]
                     if not opt_ctx.dtype or opt_ctx.dtype not in DTYPE_LOWP_FP:
-                        return False
-                    if _lowp_fp_type:
+                        all_node_support_lowp = False
+                    elif _lowp_fp_type:
                         assert (
                             _lowp_fp_type == opt_ctx.dtype
                         ), "scheduler node do not support bf16/fp16 mix"
                     else:
                         _lowp_fp_type = opt_ctx.dtype
+                        scheduler_node._lowp_fp_type = _lowp_fp_type  # type: ignore[attr-defined]
                 else:
-                    return False
+                    all_node_support_lowp = False
 
-        scheduler_node._lowp_fp_type = _lowp_fp_type  # type: ignore[attr-defined]
-        return True
+        return all_node_support_lowp
 
     def legalize_lowp_fp_dtype(self, nodes):
         def add_to_dtype(sub_graph: torch.fx.Graph):
