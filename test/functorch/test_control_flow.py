@@ -280,6 +280,25 @@ class TestControlFlow(TestCase):
         res = while_loop(cond_fn, body_fn, (x,))
         expected = _fake_while_loop(cond_fn, body_fn, (x,))
         self.assertEqual(expected, res)
+        
+    def test_while_loop_autograd_simple(self):
+        def cond_fn(x):
+            return x.sum() < 10
+
+        def body_fn(x):
+            # return (x + 1,)
+            return (x * 2 + 1,)
+        
+        x = torch.zeros(1, requires_grad=True)
+        res = while_loop(cond_fn, body_fn, (x,))
+        expected = _fake_while_loop(cond_fn, body_fn, (x,))
+        self.assertEqual(expected, res)
+        
+        grad_out = (torch.ones_like(res[0]),)
+        grads = torch.autograd.grad(res, (x,), grad_out)
+        expected_grads = torch.autograd.grad(expected, (x,), grad_out)
+        # self.assertEqual(expected, res)
+        self.assertEqual(expected_grads, grads)
 
     def test_map_illegal_inputs(self):
         def f(x, y):
