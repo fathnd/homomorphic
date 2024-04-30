@@ -919,6 +919,33 @@ def meta__efficient_attention_forward(fake_mode, func, *args, **kwargs):
     return res, logsum_exp, seed, offset, actual_max_seqlen_q, actual_max_seqlen_k
 
 
+@register_op_impl(torch.ops.aten._pack_padded_sequence.default)
+def _pack_padded_sequence(fake_mode, func, inputs, lengths, batch_first):
+    if (
+        fake_mode.shape_env is None
+        or not fake_mode.shape_env.allow_dynamic_output_shape_ops
+    ):
+        # Without symints/symfloats, cannot handle this
+        raise DynamicOutputShapeException(func)
+
+    nnz = fake_mode.shape_env.create_unbacked_symint()
+    from torch.fx.experimental.symbolic_shapes import (
+        _constrain_range_for_size,
+    )
+
+    _constrain_range_for_size(nnz)
+
+    if not batch_first:
+        # Inputs should have shape (batch_size, seq_len, *)
+        inputs = inputs.transpose(0, 1)
+
+    batch_size = inputs.size(1)
+    res_size = (batch_size, *inputs.shape[2:])
+    packed_data = inputs.new_empty(res_size)
+    batch_size = inputs.new_empty((nnz,))
+    return (packed_data, batch_size)
+
+
 FAST_OP_IMPLEMENTATIONS = {}
 
 
