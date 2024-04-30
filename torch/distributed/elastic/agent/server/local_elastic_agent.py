@@ -255,7 +255,7 @@ class LocalElasticAgent(SimpleElasticAgent):
     # pyre-fixme[56]: Pyre was not able to infer the type of the decorator
     #  `torch.distributed.elastic.metrics.prof`.
     @prof
-    def _stop_workers(self, worker_group: WorkerGroup) -> None:
+    def _stop_workers(self, worker_group: WorkerGroup, isRestart: bool = False) -> None:
         self._shutdown()
 
     # pyre-fixme[56]: Pyre was not able to infer the type of the decorator
@@ -337,7 +337,7 @@ class LocalElasticAgent(SimpleElasticAgent):
             self._health_check_server = None
         if self._pcontext:
             self._pcontext.close(death_sig)
-        if self._rdzv_handler:
+        if not isRestart and self._rdzv_handler:
             self._rdzv_handler.shutdown()
 
     # pyre-fixme[56]: Pyre was not able to infer the type of the decorator
