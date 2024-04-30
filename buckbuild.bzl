@@ -385,6 +385,8 @@ def get_aten_generated_files(enabled_backends):
         "core/TensorMethods.cpp",
         "core/aten_interned_strings.h",
         "core/enum_tag.h",
+        "torch/csrc/inductor/aoti_torch/generated/c_shim_cpu.cpp",
+        "torch/csrc/inductor/aoti_torch/generated/c_shim_cpu.h",
     ] + get_aten_derived_type_srcs(enabled_backends)
 
     # This is tiresome.  A better strategy would be to unconditionally
@@ -469,6 +471,7 @@ def gen_aten_files(
         cmd = "$(exe {}torchgen:gen) ".format(ROOT_PATH) + " ".join([
             "--source-path $(location {}:aten_src_path)/aten/src/ATen".format(ROOT),
             "--install_dir $OUT",
+            "--aoti_install_dir $OUT/torch/csrc/inductor/aoti_torch/generated"
         ] + extra_params),
         visibility = visibility,
         compatible_with = compatible_with,
@@ -1003,6 +1006,16 @@ def define_buck_targets(
             "ViewFuncs.h": ":gen_aten_libtorch[autograd/generated/ViewFuncs.h]",
             # Don't build python bindings on mobile.
             #"python_functions.h",
+        },
+        labels = labels,
+        visibility = ["PUBLIC"],
+    )
+
+    fb_xplat_cxx_library(
+        name = "generated-aoti-cpu-headers",
+        header_namespace = "",
+        exported_headers = {
+            "torch/csrc/inductor/aoti_torch/generated/c_shim_cpu.h": ":gen_aten[torch/csrc/inductor/aoti_torch/generated/c_shim_cpu.h]",
         },
         labels = labels,
         visibility = ["PUBLIC"],
