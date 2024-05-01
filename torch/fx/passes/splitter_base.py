@@ -102,6 +102,7 @@ class FxNetAccNodesFinder:
         self.module = module
         self.operator_support = operator_support
         self.allow_non_tensor = allow_non_tensor
+        self.acc_nodes: NodeSet = set()
 
     def reduce_acc_nodes_non_tensor_input_helper(
         self, cpu_worklist: NodeList
@@ -188,7 +189,7 @@ class FxNetSplitterInternalError(Exception):
 class Subgraph:
     is_acc: bool
     nodes: NodeList
-
+    device_ordinal: Optional[int] = None
 
 @compatibility(is_backward_compatible=False)
 class SplitResult(NamedTuple):
@@ -339,6 +340,9 @@ class _SplitterBase:
         self._node_submodule_map: Dict[str, str] = {}
         self._return_tuple = return_tuple
 
+        self.tags: List[str] = []
+        self.device_ordinal_map: Dict[str, int] = {}
+
     # ===============================================================
     # Helpers for ctor and initial state
     # ===============================================================
@@ -431,6 +435,7 @@ class _SplitterBase:
 
         drawer = CustomDrawer(mod, "node_support", ignore_getattr=True)
         dot_graph = drawer.get_main_dot_graph()
+        # pyre-fixme[16]: `pydot.Dot` has no attribute `write_raw`.
         dot_graph.write_raw("node_support.dot")
 
     def node_support_preview(self, dump_graph: bool = False):
@@ -526,6 +531,7 @@ class _SplitterBase:
             )
             dot_graphs = drawer.get_all_dot_graphs()
             for name, dot_graph in dot_graphs.items():
+                # pyre-fixme[16]: `pydot.Dot` has no attribute `write_raw`.
                 dot_graph.write_raw(f"{name}.dot")
 
         max_qps: float = self.PCIe_BW
@@ -836,10 +842,13 @@ class _SplitterBase:
         return result
 
     def tag(self, subgraphs: List[Subgraph]):
-        self.tags: List[str] = []
+        self.tags = []
+        self.device_ordinal_map = {}
         for subgraph in subgraphs:
             tag = f"_run_on_acc_{len(self.tags)}" if subgraph.is_acc else f"{self.non_acc_submodule_name}{len(self.tags)}"
             self.tags.append(tag)
+            if subgraph.device_ordinal is not None:
+                self.device_ordinal_map[tag] = subgraph.device_ordinal
             for node in subgraph.nodes:
                 if hasattr(node, "tag"):
                     raise FxNetSplitterInternalError(f"Node {node} was already tagged")
@@ -853,6 +862,8 @@ class _SplitterBase:
             for node in self.module.graph.nodes:
                 if hasattr(node, "tag"):
                     del node.tag
+        if self.device_ordinal_map:
+            setattr(split_module, 'device_ordinal_map', self.device_ordinal_map)
         return split_module
 
     def __call__(self) -> torch.fx.GraphModule:
