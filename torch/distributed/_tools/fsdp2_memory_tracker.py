@@ -98,6 +98,7 @@ class MemoryTrackingMode(TorchDispatchMode):
         self.memory_tracking: Dict[str, Dict[str, Dict[str, int]]]
         self.parents: List[str] = []
         self._MAX_MEMORY: int
+        self._MAX_MEMORY_BREAKDOWN: Dict[str, int]
         self.FIRST_OPT_ITER: bool = True
         self._RECORD_PRE_FORWARD_ORDER: bool = False
         self._IN_FAKE_MODE: bool = False
@@ -131,6 +132,7 @@ class MemoryTrackingMode(TorchDispatchMode):
 
         if self._MAX_MEMORY < curr_use:
             self._MAX_MEMORY = curr_use
+            self._MAX_MEMORY_BREAKDOWN = self._get_current_memory_allocated()
 
     def _track(self, t: torch.Tensor):
         if isinstance(t, DTensor):
@@ -155,15 +157,7 @@ class MemoryTrackingMode(TorchDispatchMode):
             ]
         return mem_stats
 
-    def print_mem_stats(self, stats: Optional[Dict[str, int]] = None):
-        if stats is None:
-            stats = self._get_current_memory_allocated()
-
-        def rounding_fn(value, divisor, precision) -> Union[float, int]:
-            if divisor == 1:
-                return value
-            return round(value / divisor, precision)
-
+    def _get_mem_divisor(self) -> int:
         divisor = 1
         if self.units == "GB":
             divisor = 2**30
@@ -171,17 +165,33 @@ class MemoryTrackingMode(TorchDispatchMode):
             divisor = 2**20
         elif self.units == "KB":
             divisor = 2**10
+        return divisor
+
+    def _rounding_fn(self, value: int, precision: int) -> Union[float, int]:
+        divisor = self._get_mem_divisor()
+        if divisor == 1:
+            return value
+        return round(value / divisor, precision)
+
+    def print_mem_stats(self, stats: Optional[Dict[str, int]] = None):
+        if stats is None:
+            stats = self._get_current_memory_allocated()
 
         for mem_type, mem_val in stats.items():
             print(
                 f"\t{mem_type}:"
-                f" {rounding_fn(mem_val, divisor, 2)} {self.units}"
+                f" {self._rounding_fn(mem_val, 2)} {self.units}"
             )
 
     def get_max_memory(self) -> int:
         return self._MAX_MEMORY
 
-    def _display_mem_stats(self):
+    def _display_peak_mem_stats(self):
+        print(f"Peak Memory Usage: {self._rounding_fn(self._MAX_MEMORY, 2)} {self.units}")
+        print("Peak Memory Usage Breakdown:")
+        self.print_mem_stats(self._MAX_MEMORY_BREAKDOWN)
+
+    def _display_modulewise_mem_stats(self):
         for mod in self.memory_tracking.keys():
             print(f"Module:  {mod}")
             for state, stats in self.memory_tracking[mod].items():
@@ -404,7 +414,7 @@ class MemoryTrackingMode(TorchDispatchMode):
                 super().__init__()
 
             def get_future(self) -> Future:
-                future = Future()
+                future: Future = Future()
                 future.set_result(None)
                 return future
 
@@ -507,6 +517,7 @@ class MemoryTrackingMode(TorchDispatchMode):
             defaultdict(lambda: defaultdict(defaultdict))
         )
         self._MAX_MEMORY = 0
+        self._MAX_MEMORY_BREAKDOWN = defaultdict(int)
         self.WINFO = WeakIdKeyDictionary()
         self._IN_FAKE_MODE = True if active_fake_mode() else False
         self._register_module_and_optimizer_hooks()
@@ -517,7 +528,8 @@ class MemoryTrackingMode(TorchDispatchMode):
 
     def __exit__(self, *args):
         if self.display_modulewise_stats:
-            self._display_mem_stats()
+            self._display_modulewise_mem_stats()
+            self._display_peak_mem_stats()
         self._deregister_module_and_optimizer_hooks()
         self._restore_collectives()
         super().__exit__(*args)
