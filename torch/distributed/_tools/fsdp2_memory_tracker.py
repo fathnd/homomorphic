@@ -187,7 +187,9 @@ class MemoryTrackingMode(TorchDispatchMode):
         return self._MAX_MEMORY
 
     def _display_peak_mem_stats(self):
-        print(f"Peak Memory Usage: {self._rounding_fn(self._MAX_MEMORY, 2)} {self.units}")
+        print(
+            f"Peak Memory Usage: {self._rounding_fn(self._MAX_MEMORY, 2)} {self.units}"
+        )
         print("Peak Memory Usage Breakdown:")
         self.print_mem_stats(self._MAX_MEMORY_BREAKDOWN)
 
@@ -503,7 +505,6 @@ class MemoryTrackingMode(TorchDispatchMode):
         dist.all_reduce = self._collective_saved_methods.all_reduce
         dist.barrier = self._collective_saved_methods.barrier
 
-
     def _mark_inputs(self):
         if self.inputs is not None:
 
@@ -513,9 +514,7 @@ class MemoryTrackingMode(TorchDispatchMode):
             tree_map_only(torch.Tensor, _track_inputs, self.inputs)
 
     def __enter__(self):
-        self.memory_tracking = (
-            defaultdict(lambda: defaultdict(defaultdict))
-        )
+        self.memory_tracking = defaultdict(lambda: defaultdict(defaultdict))
         self._MAX_MEMORY = 0
         self._MAX_MEMORY_BREAKDOWN = defaultdict(int)
         self.WINFO = WeakIdKeyDictionary()
