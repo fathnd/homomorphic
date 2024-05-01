@@ -297,7 +297,11 @@ class OpDispatcher:
                 else:
                     mesh = arg.device_mesh
             elif isinstance(arg, torch.Tensor):
-                if arg.ndim == 0 or self._allow_implicit_replication:
+                if (
+                    arg.ndim == 0
+                    or arg.numel() == 1
+                    or self._allow_implicit_replication
+                ):
                     mesh = mesh or try_find_mesh_from_args(op_call, args_list)
                     # scalar tensor can be safely treated as replicated
                     args_schema.append(
