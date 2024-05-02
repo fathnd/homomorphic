@@ -4052,16 +4052,16 @@ def forward(self, b_pred, b_t, x, y):
             """\
 def forward(self, b_t, x, y):
     submod_3 = self.submod_1
-    add_1 = torch._higher_order_ops.wrap.wrap_with_set_grad_enabled(True, submod_3, b_t, x, y);  submod_3 = b_t = x = y = None
+    add_1 = torch._higher_order_ops.wrap.wrap_with_set_grad_enabled(True, submod_3, x, b_t, y);  submod_3 = x = b_t = y = None
     return (add_1,)""",
         )
 
         self.assertExpectedInline(
             str(exported_program.graph_module.true_graph_0.submod_1.code.strip()),
             """\
-def forward(self, b_t, x, y):
-    sub = torch.ops.aten.sub.Tensor(b_t, 1);  b_t = None
-    add = torch.ops.aten.add.Tensor(sub, x);  sub = x = None
+def forward(self, x, b_t, y):
+    sub = torch.ops.aten.sub.Tensor(x, 1);  x = None
+    add = torch.ops.aten.add.Tensor(sub, b_t);  sub = b_t = None
     add_1 = torch.ops.aten.add.Tensor(add, y);  add = y = None
     return add_1""",
         )
