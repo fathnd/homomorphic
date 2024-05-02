@@ -2,6 +2,7 @@ import os
 import platform
 import shutil
 from glob import glob
+from os.path import abspath, dirname
 from typing import Dict, Optional
 
 from setuptools import distutils  # type: ignore[import]
@@ -92,3 +93,10 @@ def build_caffe2(
         for proto_file in glob(os.path.join(caffe2_proto_dir, "*.py")):
             if proto_file != os.path.join(caffe2_proto_dir, "__init__.py"):
                 shutil.copy(proto_file, os.path.join("caffe2", "proto"))
+
+    pytorch_root = dirname(dirname(abspath(__file__)))
+    lib_path = os.path.join(pytorch_root, "build", "lib")
+    for pattern in ("*.a", "*.dll"):
+        files = glob(os.path.join(lib_path, pattern))
+        for file in files:
+            os.remove(file)
