@@ -774,6 +774,13 @@ class FakeTensorTest(TestCase):
             grad_in = torch.ops.aten._adaptive_avg_pool2d_backward(grad_out, inp)
             self.assertTrue(torch._prims_common.suggest_memory_format(grad_in) == torch.channels_last)
 
+    def test__adaptive_avg_pool3d_backward(self):
+        with FakeTensorMode():
+            grad_out = torch.rand(2, 3, 4, 4, 4)
+            inp = torch.rand(2, 3, 4, 4, 4).to(memory_format=torch.channels_last_3d)
+            grad_in = torch.ops.aten._adaptive_avg_pool3d_backward(grad_out, inp)
+            self.assertTrue(torch._prims_common.suggest_memory_format(grad_in) == torch.channels_last_3d)
+
     def test_export_numpy(self):
         class MyNumpyModel(torch.nn.Module):
             def forward(self, input):
@@ -1448,11 +1455,18 @@ class FakeTensorDispatchCache(TestCase):
             z = x.to(device="cuda")
             self._test_cache_key(fm, x, y, z)
 
-    def test_cache_key_memory_format(self):
+    def test_cache_key_memory_format_2d(self):
         with FakeTensorMode() as fm:
             x = torch.randn(1, 2, 3, 4)
             y = torch.randn(1, 2, 3, 4)
             z = x.to(memory_format=torch.channels_last)
+            self._test_cache_key(fm, x, y, z)
+
+    def test_cache_key_memory_format_3d(self):
+        with FakeTensorMode() as fm:
+            x = torch.randn(1, 2, 3, 4, 5)
+            y = torch.randn(1, 2, 3, 4, 5)
+            z = x.to(memory_format=torch.channels_last_3d)
             self._test_cache_key(fm, x, y, z)
 
     def test_cache_key_storage_offset(self):
