@@ -27,7 +27,11 @@
 
 namespace caffe2 {
 
+#if defined(USE_ROCM)
+constexpr int kWarpSize = __AMDGCN_WAVEFRONT_SIZE;
+#else
 constexpr int kWarpSize = 32;
+#endif
 
 template <typename T>
 inline __device__ T shfl_xor(const T val, int laneMask, int width = kWarpSize) {
