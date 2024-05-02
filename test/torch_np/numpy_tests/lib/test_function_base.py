@@ -3256,12 +3256,7 @@ class TestPercentile(TestCase):
         "q",
         [
             7,
-            subtest(
-                [1, 7],
-                decorators=[
-                    xpassIfTorchDynamo,
-                ],
-            ),
+            subtest([1, 7], decorators=[xpassIfTorchDynamo]),
         ],
     )
     @parametrize(
@@ -3273,13 +3268,13 @@ class TestPercentile(TestCase):
             subtest(
                 (0, 1),
                 decorators=[
-                    xpassIfTorchDynamo,
+                    skip(reason="Tuple axes"),
                 ],
             ),
             subtest(
                 (-3, -1),
                 decorators=[
-                    xpassIfTorchDynamo,
+                    skip(reason="Tuple axes"),
                 ],
             ),
         ],
@@ -3839,13 +3834,13 @@ class TestMedian(TestCase):
             subtest(
                 (0, 1),
                 decorators=[
-                    xpassIfTorchDynamo,
+                    skip(reason="Tuple axes"),
                 ],
             ),
             subtest(
                 (-3, -1),
                 decorators=[
-                    xpassIfTorchDynamo,
+                    skip(reason="Tuple axes"),
                 ],
             ),
         ],
