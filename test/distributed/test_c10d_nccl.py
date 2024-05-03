@@ -1584,6 +1584,23 @@ class ProcessGroupNCCLTest(MultiProcessTestCase):
         pg_2 = c10d.new_group([0, 1])
         self.assertEqual(pg_2.group_desc, "undefined")
 
+    @requires_nccl()
+    @skip_but_pass_in_sandcastle_if(not TEST_MULTIGPU, "NCCL test requires 2+ GPUs")
+    def test_cleanup(self):
+        store = c10d.FileStore(self.file_name, self.world_size)
+        device = torch.device(f"cuda:{self.rank}")
+        pg_default = self._create_process_group_nccl(
+            store, self.opts(), device_id=device
+        )
+        tensor = torch.rand(10, 10, device=device)
+        for _ in range(100):
+            dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+
+        torch.cuda.synchronize()
+        # making sure we can exit cleanly after explicitly destroy pg
+        # https://github.com/pytorch/pytorch/issues/124468
+        dist.destroy_process_group()
+
 
 class DistributedDataParallelTest(
     test_c10d_common.CommonDistributedDataParallelTest, MultiProcessTestCase
