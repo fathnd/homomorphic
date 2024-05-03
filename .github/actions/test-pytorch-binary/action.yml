@@ -2,9 +2,26 @@ name: Test pytorch binary
 
 description: Pulls the docker image and tests the pytorch binary using it. All env variable referenced in the "Test PyTorch binary" step must be set in the GITHUB_ENV file
 
+inputs:
+  build_environment:
+    required: true
+    type: string
+    description: The build environment
+
 runs:
   using: composite
   steps:
+    - name: "Pull test scripts updates"
+      if: inputs.build_environment == 'linux-s390x-binary-manywheel'
+      continue-on-error: true
+      shell: bash
+      run: |
+        set -x
+        cd "${GITHUB_WORKSPACE}/builder"
+        # remove this step when this PR is merged
+        curl -o 1802.patch -L https://github.com/pytorch/builder/pull/1802.patch
+        patch -p1 -i 1802.patch
+
     - name: Test PyTorch binary
       shell: bash
       run: |
@@ -35,7 +52,7 @@ runs:
           "${DOCKER_IMAGE}"
         )
 
-        if [[ "${GPU_ARCH_TYPE}" != "rocm" && "${BUILD_ENVIRONMENT}" != "linux-aarch64-binary-manywheel" ]]; then
+        if [[ "${GPU_ARCH_TYPE}" != "rocm" && "${BUILD_ENVIRONMENT}" != "linux-aarch64-binary-manywheel" && "${BUILD_ENVIRONMENT}" != "linux-s390x-binary-manywheel" ]]; then
           # Propagate download.pytorch.org IP to container. This is only needed on Linux non aarch64 runner
           grep download.pytorch.org /etc/hosts | docker exec -i "${container_name}" bash -c "/bin/cat >> /etc/hosts"
         fi
@@ -44,3 +61,19 @@ runs:
         # Generate test script
         docker exec -t -w "${PYTORCH_ROOT}" -e OUTPUT_SCRIPT="/run.sh" "${container_name}" bash -c "bash .circleci/scripts/binary_linux_test.sh"
         docker exec -t "${container_name}" bash -c "source ${BINARY_ENV_FILE} && bash -x /run.sh"
+
+        # on s390x stop the container for clean worker stop
+        if [[ ${BUILD_ENVIRONMENT} == *"s390x"* ]]; then
+          # ignore expansion of "docker ps -q" since it could be empty
+          # shellcheck disable=SC2046
+          docker stop $(docker ps -q) || true
+        fi
+
+    - name: Cleanup docker
+      if: always() && inputs.build_environment == 'linux-s390x-binary-manywheel'
+      shell: bash
+      run: |
+        # on s390x stop the container for clean worker stop
+        # ignore expansion of "docker ps -q" since it could be empty
+        # shellcheck disable=SC2046
+        docker stop $(docker ps -q) || true
