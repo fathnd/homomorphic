@@ -459,7 +459,7 @@ class LocalElasticAgentTest(unittest.TestCase):
         for return_value in res.return_values.values():
             self.assertIsInstance(return_value, torch.Tensor)
             self.assertEqual((100, 100), return_value.shape)
-    
+
     @skip_but_pass_in_sandcastle_if(
         TEST_WITH_DEV_DBG_ASAN, "test incompatible with dev/dbg asan"
     )
@@ -1448,7 +1448,7 @@ class LocalElasticAgentTest(unittest.TestCase):
     def test_shutdown_called_etcd_v2(self):
         self.run_test_with_backend(backend="etcd-v2", test_to_run=self.shutdown_called)
 
-    def fail_rank_one_once(self):                
+    def fail_rank_one_once(self):
         res = self.run_agent(Conf(entrypoint=dummy_compute_simulate_rank_failure, local_world_size=2), max_restarts=3)
         self.assertFalse(res.is_failed())
         for return_value in res.return_values.values():
