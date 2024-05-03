@@ -77,11 +77,13 @@ def _happy_function():
 def _sad_function():
     raise RuntimeError("sad because i throw")
 
+
 def dummy_compute() -> torch.Tensor:
     """
     returns a predefined size random Tensor
     """
     return torch.rand(100, 100)
+
 
 def dummy_compute_simulate_rank_failure() -> torch.Tensor:
     """
@@ -91,6 +93,7 @@ def dummy_compute_simulate_rank_failure() -> torch.Tensor:
     if os.environ["RANK"] == "1" and os.environ["TORCHELASTIC_RESTART_COUNT"] == "0":
         os.kill(os.getpid(), 9)
     return torch.rand(100, 100)
+
 
 def _fatal_signal_function(expected_error_index: int, sig: int):
     rank = int(os.environ["RANK"])
@@ -1449,7 +1452,10 @@ class LocalElasticAgentTest(unittest.TestCase):
         self.run_test_with_backend(backend="etcd-v2", test_to_run=self.shutdown_called)
 
     def fail_rank_one_once(self):
-        res = self.run_agent(Conf(entrypoint=dummy_compute_simulate_rank_failure, local_world_size=2), max_restarts=3)
+        res = self.run_agent(
+            Conf(entrypoint=dummy_compute_simulate_rank_failure, local_world_size=2),
+            max_restarts=3,
+        )
         self.assertFalse(res.is_failed())
         for return_value in res.return_values.values():
             self.assertIsInstance(return_value, torch.Tensor)
