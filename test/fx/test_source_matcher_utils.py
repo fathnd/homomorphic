@@ -13,6 +13,7 @@ from torch.fx.passes.utils.source_matcher_utils import (
     check_subgraphs_connected,
     get_source_partitions,
 )
+from torch.fx.passes.tools_common import legalize_graph
 from torch.testing._internal.jit_utils import JitTestCase
 
 
@@ -205,3 +206,38 @@ class TestSourceMatcher(JitTestCase):
         self.assertEqual(len(module_partitions), 2)
         self.assertEqual(len(module_partitions[torch.nn.functional.linear]), 4)
         self.assertEqual(len(module_partitions[torch.nn.functional.relu]), 2)
+
+    @unittest.skipIf(not is_dynamo_supported(), "Dynamo not supported")
+    def test_legalize_slice(self):
+        class M(torch.nn.Module):
+            def forward(self, x, y):
+                b = x.item()
+                torch._check_is_size(b)
+                torch._check(b + 1 < y.size(0))
+                return y[:b + 1]
+
+        ep = torch.export.export(M(), (torch.tensor(4), torch.randn(10)))
+        fake_inputs = [node.meta["val"] for node in ep.graph.nodes if node.op == "placeholder"]
+        gm = ep.module()
+        with fake_inputs[0].fake_mode:
+            torch.fx.Interpreter(gm).run(*fake_inputs)
+        legalized_gm = legalize_graph(gm)
+        with fake_inputs[0].fake_mode:
+            torch.fx.Interpreter(legalized_gm).run(*fake_inputs)
+
+        self.assertExpectedInline(
+            str(legalized_gm.code.strip()),
+            """\
+def forward(self, arg_0, arg_1):
+    x, y, = fx_pytree.tree_flatten_spec(([arg_0, arg_1], {}), self._in_spec)
+    _local_scalar_dense = torch.ops.aten._local_scalar_dense.default(x);  x = None
+    add = _local_scalar_dense + 1
+    lt = _local_scalar_dense < 9
+    _assert_scalar_1 = torch.ops.aten._assert_scalar.default(lt, 'Deferred runtime assertion failed u0 < 9');  lt = None
+    mul = -1 * _local_scalar_dense
+    le = mul <= 0;  mul = None
+    _assert_scalar = torch.ops.aten._assert_scalar.default(le, 'Deferred runtime assertion failed -u0 <= 0');  le = None
+    sym_constrain_range = torch.ops.aten.sym_constrain_range.default(_local_scalar_dense, min = 0, max = 8);  _local_scalar_dense = None
+    slice_1 = torch.ops.aten.slice.Tensor(y, 0, 0, add);  y = add = None
+    return pytree.tree_unflatten((slice_1,), self._out_spec)"""
+        )
