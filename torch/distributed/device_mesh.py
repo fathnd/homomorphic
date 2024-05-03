@@ -89,7 +89,11 @@ else:
                     res_sub_mesh = sub_mesh
 
             res_sub_mesh._dim_group_infos = [device_mesh._dim_group_infos[mesh_dim]]  # type: ignore[possibly-undefined]
+            # Update the hash of the submesh to take the parent mesh into consideration
+            # so the same mesh with or without the parent mesh is considered different.
+            res_sub_mesh._hash = hash((res_sub_mesh._hash, device_mesh._hash))
             # Assign the current DeviceMesh as the parent of the child DeviceMesh.
+            # We need to update the mappings after the child mesh hash update.
             self.child_to_parent_mapping[res_sub_mesh] = device_mesh
             return res_sub_mesh
 
@@ -209,11 +213,18 @@ else:
                 if isinstance(mesh, torch.Tensor)
                 else torch.tensor(mesh, dtype=torch.int)
             )
-            self.mesh_dim_names = mesh_dim_names
+            self.mesh_dim_names = tuple(mesh_dim_names) if mesh_dim_names else None
 
             # private field to pre-generate DeviceMesh's hash
             self._flatten_mesh_list = tuple(self.mesh.flatten().tolist())
-            self._hash = hash((self._flatten_mesh_list, self.mesh.shape, id(self)))
+            self._hash = hash(
+                (
+                    self._flatten_mesh_list,
+                    self.mesh.shape,
+                    self.device_type,
+                    self.mesh_dim_names,
+                )
+            )
 
             # Skip process group initialization if xla device or init backend is False
             # TODO(yeounoh) implement DeviceMesh backend and register XLA backend.
@@ -339,12 +350,15 @@ else:
         def __eq__(self, other: object) -> bool:
             if not isinstance(other, DeviceMesh):
                 return False
-            if id(self.mesh) == id(other.mesh):
+            if id(self) == id(other):
                 return True
-            return (
-                self.mesh.shape == other.mesh.shape
-                and self._flatten_mesh_list == other._flatten_mesh_list
-            )
+            else:
+                return (
+                    self._flatten_mesh_list == other._flatten_mesh_list
+                    and self.mesh.shape == other.mesh.shape
+                    and self.device_type == other.device_type
+                    and self.mesh_dim_names == other.mesh_dim_names
+                )
 
         def __getitem__(self, mesh_dim_name: str) -> "DeviceMesh":
             """
