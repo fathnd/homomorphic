@@ -48,6 +48,7 @@ __all__ = [
     'check_module_version_greater_or_equal',
     'validate_cuda_device',
     'validate_hpu_device',
+    'validate_xpu_device',
     'location_tag',
     'default_restore_location',
     'normalize_storage_type',
@@ -269,6 +270,13 @@ def _meta_tag(obj):
     if obj.device.type == 'meta':
         return 'meta'
 
+def _meta_tag(obj):
+    if obj.device.type == 'xpu':
+        return 'xpu'
+
+def _xpu_tag(obj):
+    if obj.device.type == 'xpu':
+        return 'xpu:' + str(obj.device.index)
 
 def _privateuse1_tag(obj):
     backend_name = torch._C._get_privateuse1_backend_name()
@@ -353,6 +361,35 @@ def _meta_deserialize(obj, location):
     if location == 'meta':
         return torch.UntypedStorage(obj.nbytes(), device='meta')
 
+def validate_xpu_device(location):
+    xpu = getattr(torch, "xpu", None)
+    assert xpu is not None, "XPU device module is not loaded"
+    device = xpu._utils._get_device_index(location, optional=True)
+
+    if not xpu.is_available():
+        raise RuntimeError('Attempting to deserialize object on a XPU '
+                           'device but torch.xpu.is_available() is False. '
+                           'If you are running on a CPU-only machine, '
+                           'please use torch.load with map_location=torch.device(\'cpu\') '
+                           'to map your storages to the CPU.')
+    device_count = xpu.device_count()
+    if device >= device_count:
+        raise RuntimeError('Attempting to deserialize object on XPU device '
+                           f'{device} but torch.xpu.device_count() is {device_count}. Please use '
+                           'torch.load with map_location to map your storages '
+                           'to an existing device.')
+    return device
+
+def _xpu_deserialize(obj, location):
+    if location.startswith('xpu'):
+        xpu = getattr(torch, "xpu", None)
+        assert xpu is not None, "XPU device module is not loaded"
+        device = validate_xpu_device(location)
+        if getattr(obj, "_torch_load_uninitialized", False):
+            with xpu.device(device):
+                return torch.UntypedStorage(obj.nbytes(), device=torch.device(location))
+        else:
+            return obj.xpu(device)
 
 def _validate_privateuse1_device(location, backend_name):
     '''
@@ -416,7 +453,7 @@ register_package(21, _mps_tag, _mps_deserialize)
 register_package(22, _meta_tag, _meta_deserialize)
 register_package(23, _privateuse1_tag, _privateuse1_deserialize)
 register_package(24, _hpu_tag, _hpu_deserialize)
-
+register_package(25, _xpu_tag, _xpu_deserialize)
 
 def location_tag(storage: Union[Storage, torch.storage.TypedStorage, torch.UntypedStorage]):
     for _, tagger, _ in _package_registry:

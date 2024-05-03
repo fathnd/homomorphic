@@ -120,6 +120,36 @@ def _cuda(self, device=None, non_blocking=False, **kwargs):
             untyped_storage.copy_(self, non_blocking)
             return untyped_storage
 
+def _xpu(self, device=None, non_blocking=False, **kwargs):
+    """Returns a copy of this object in XPU memory.
+
+    If this object is already in XPU memory and on the correct device, then
+    no copy is performed and the original object is returned.
+
+    Args:
+        device (int): The destination XPU id. Defaults to the current device.
+        non_blocking (bool): If ``True`` and the source is in pinned memory,
+            the copy will be asynchronous with respect to the host. Otherwise,
+            the argument has no effect.
+        **kwargs: For compatibility, may contain the key ``async`` in place of
+            the ``non_blocking`` argument.
+    """
+    non_blocking = _get_async_or_non_blocking("xpu", non_blocking, kwargs)
+    xpu = getattr(torch, "xpu", None)
+    assert xpu is not None, "XPU device module is not loaded"
+    if self.is_xpu:
+        if device is None:
+            device = xpu.current_device()
+        if self.get_device() == device:
+            return self
+    else:
+        if device is None:
+            device = -1
+    with xpu.device(device):
+        assert not self.is_sparse, "sparse storage is not supported for XPU tensors"
+        untyped_storage = torch.UntypedStorage(self.size(), device=torch.device("xpu"))
+        untyped_storage.copy_(self, non_blocking)
+        return untyped_storage
 
 def _get_async_or_non_blocking(function_name, non_blocking, kwargs):
     """Return the non-blocking flag given the function name and kwargs.

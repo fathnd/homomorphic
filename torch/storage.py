@@ -1,7 +1,7 @@
 import io
 
 import torch
-from ._utils import _type, _cuda, _hpu
+from ._utils import _type, _cuda, _hpu, _xpu
 from torch.types import Storage
 from typing import cast, Any, Dict as _Dict, Optional as _Optional, TypeVar, Type, Union
 import copy
@@ -81,6 +81,8 @@ class _StorageBase:
     def is_cuda(self): ...  # noqa: E704
     @property
     def is_hpu(self): ...  # noqa: E704
+    @property
+    def is_xpu(self): ...  # noqa: E704
     @classmethod
     def from_file(cls, filename, shared, nbytes) -> T: ...  # type: ignore[empty-body, misc, type-var] # noqa: E704
     @classmethod
@@ -329,6 +331,10 @@ class UntypedStorage(torch._C.StorageBase, _StorageBase):
         return self.device.type == 'hpu'
 
     @property
+    def is_xpu(self):
+        return self.device.type == 'xpu'
+
+    @property
     def filename(self) -> _Optional[str]:
         """Returns the file name associated with this storage if the storage was memory mapped from a file.
            or ``None`` if the storage was not created by memory mapping a file."""
@@ -384,6 +390,7 @@ def _load_from_bytes(b):
 _StorageBase.type = _type  # type: ignore[assignment]
 _StorageBase.cuda = _cuda  # type: ignore[assignment]
 _StorageBase.hpu = _hpu  # type: ignore[assignment]
+_StorageBase.xpu = _xpu  # type: ignore[assignment]
 
 
 @lru_cache(maxsize=None)
@@ -673,6 +680,11 @@ class TypedStorage:
         _warn_typed_storage_removal()
         return self._untyped_storage.device.type == 'hpu'
 
+    @property
+    def is_xpu(self):
+        _warn_typed_storage_removal()
+        return self._untyped_storage.device.type == 'xpu'
+
     def untyped(self):
         """Return the internal :class:`torch.UntypedStorage`."""
         _warn_typed_storage_removal()
@@ -825,6 +837,13 @@ class TypedStorage:
             raise RuntimeError("Cannot create HPU storage with quantized dtype")
         hpu_storage: torch.UntypedStorage = self._untyped_storage.hpu(device, non_blocking, **kwargs)
         return self._new_wrapped_storage(hpu_storage)
+
+    def xpu(self, device=None, non_blocking=False, **kwargs) -> T:  # type: ignore[misc, type-var]
+        _warn_typed_storage_removal()
+        if self.dtype in [torch.quint8, torch.quint4x2, torch.quint2x4, torch.qint32, torch.qint8]:
+            raise RuntimeError("Cannot create XPU storage with quantized dtype")
+        xpu_storage: torch.UntypedStorage = self._untyped_storage.xpu(device, non_blocking, **kwargs)
+        return self._new_wrapped_storage(xpu_storage)
 
     def element_size(self):
         _warn_typed_storage_removal()
@@ -1211,6 +1230,7 @@ class TypedStorage:
 TypedStorage.type.__doc__ = _type.__doc__
 TypedStorage.cuda.__doc__ = _cuda.__doc__
 TypedStorage.hpu.__doc__ = _hpu.__doc__
+TypedStorage.xpu.__doc__ = _xpu.__doc__
 
 class _LegacyStorageMeta(type):
     dtype: torch.dtype
