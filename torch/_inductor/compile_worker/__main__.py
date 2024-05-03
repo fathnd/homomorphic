@@ -3,6 +3,9 @@ import os
 import sys
 import typing
 
+print(f"*** sys.path = {sys.path}", file=sys.stderr)
+print(f"*** PYTHON_PATH = {os.environ.get('PYTHON_PATH', '<empty>')}", file=sys.stderr)
+
 from torch._inductor.codecache import _set_triton_ptxas_path, caching_device_properties
 from torch._inductor.compile_worker.subproc_pool import Pipe, SubprocMain
 from torch._inductor.compile_worker.watchdog import _async_compile_initializer
@@ -38,8 +41,14 @@ def main():
     caching_device_properties()
 
     _async_compile_initializer(args.parent)
+    print(f"*** New subproc running with {args.workers} workers", file=sys.stderr)
     SubprocMain(args.workers, read_fd, write_fd).main()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as ex:
+        print(f"*** Got exception in main: {ex}", file=sys.stderr)
+
+    print("*** sub-process main is done", file=sys.stderr)
