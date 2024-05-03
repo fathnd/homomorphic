@@ -118,6 +118,22 @@ def _dispatch_sqrt(
         return math.sqrt(x)
 
 
+def _disable_dynamo_if_unsupported(func):
+    def maybe_fallback(self, *args, **kwargs):
+        if is_compiling() and not kwargs.get("capturable", False):
+            import torch._dynamo
+
+            @torch._disable_dynamo
+            def disabled_func(self, *args, **kwargs):
+                return func(self, *args, **kwargs)
+
+            disabled_func(self, *args, **kwargs)
+        else:
+            return func(self, *args, **kwargs)
+
+    return maybe_fallback
+
+
 # For any optimizer with a faster implementation, we attempt to default to the
 # fastest + stablest whenever possible. For foreach, the requirements are to have
 # native params all on CUDA. For fused, there's currently the additional requirement
