@@ -12,6 +12,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # protobuf header files, because protobuf header files will transitively force
 # one to link against a specific protobuf version.
 
+# if(BUILD_LIBTORCHLESS)
+#  find_library(c10 c10 PATHS /home/sahanp/.conda/envs/pytorch-3.10/lib/python3.10/site-packages/libtorch/lib/libc10.so NO_DEFAULT_PATH)
+#  return()
+# endif()
+
+
 # ---[ Configure macro file.
 set(C10_USE_GFLAGS ${USE_GFLAGS}) # used in cmake_macros.h.in
 set(C10_USE_GLOG ${USE_GLOG}) # used in cmake_macros.h.in
