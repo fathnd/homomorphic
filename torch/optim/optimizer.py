@@ -168,6 +168,11 @@ def _get_scalar_dtype(is_fused=None):
     )
 
 
+def _get_capturable_supported_devices() -> List[str]:
+    r"""Return the device type list that supports capturable optimizer."""
+    return ["cuda", "xla", torch._C._get_privateuse1_backend_name()]
+
+
 # Common doc strings among optimizers
 _foreach_doc = r"""foreach (bool, optional): whether foreach implementation of optimizer
             is used. If unspecified by the user (so foreach is None), we will try to use
