@@ -266,7 +266,7 @@ def _remap_constants(
     constants: Dict[str, Union[torch.Tensor, torch.ScriptObject]],
 ) -> None:
     """Rewrite the graph signature and constants table to use the FQN from the original module."""
-    remap_table: Dict[str, str] = {}
+    remap_table: Dict[str, List[str]] = {}
     for name, value in constants.items():
         if value in orig_constant_attrs:
             remap_table[name] = orig_constant_attrs[value]
@@ -278,11 +278,13 @@ def _remap_constants(
         ):
             orig_target = spec.target
             assert orig_target is not None
-            spec.target = remap_table.get(orig_target, orig_target)
+            targets = remap_table.get(orig_target, [orig_target])
+            spec.target = targets[0]
 
             constant = constants[orig_target]
             del constants[orig_target]
-            constants[spec.target] = constant
+            for target in targets:
+                constants[target] = constant
 
 
 def _rename_constants_nodes(
@@ -472,12 +474,7 @@ def _gather_constant_attrs(m: torch.nn.Module) -> ConstantAttrMap:
                     continue
 
                 fqn = ".".join(prefix_atoms + [k])
-                if v in constants:
-                    raise ValueError(
-                        f"Duplicate reference to constant attribute found: '{constants[v]}' and '{fqn}'."
-                    )
-
-                constants[v] = fqn
+                constants.add(v, fqn)
         for k, v in m.named_children():
             inner(v, prefix_atoms + [k], constants)
 
