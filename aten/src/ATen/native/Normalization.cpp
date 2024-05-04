@@ -493,7 +493,8 @@ BatchNormBackend _select_batch_norm_backend(
 
   if (
       input.is_cuda()
-      && input.scalar_type() != at::kBFloat16 && weight.scalar_type() != at::kBFloat16
+      && (at::globalContext().userForceCuDNN() ||
+      (input.scalar_type() != at::kBFloat16 && weight.scalar_type() != at::kBFloat16
       && (input.scalar_type() != at::kHalf
         || weight.scalar_type() == at::kFloat)
       && weight.defined() && bias.defined()
@@ -505,7 +506,7 @@ BatchNormBackend _select_batch_norm_backend(
       && detail::getCUDAHooks().compiledWithCuDNN()
       && eps >= detail::getCUDAHooks().batchnormMinEpsilonCuDNN()
       && cudnn_enabled && detail::getCUDAHooks().versionCuDNN() >= 5110L
-      && input.sym_numel() < std::numeric_limits<std::int32_t>::max() // some cuDNN kernels have 32-bit indexing limitations
+      && input.sym_numel() < std::numeric_limits<std::int32_t>::max())) // some cuDNN kernels have 32-bit indexing limitations
   ) {
     return BatchNormBackend::Cudnn;
   }
