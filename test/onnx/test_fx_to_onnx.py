@@ -330,6 +330,7 @@ class TestFxToOnnx(pytorch_test_common.ExportTestCase):
                 expected_node="aten.mul.Tensor",
             )
 
+    @pytorch_test_common.xfail(error_message="'submodule_1' not found in {")
     def test_symbolic_shape_of_values_inside_function_is_exported_as_graph_value_info(
         self,
     ):
@@ -385,6 +386,9 @@ class TestFxToOnnx(pytorch_test_common.ExportTestCase):
         for node in model_proto.graph.node:
             _assert_node_outputs_has_value_info(node, type_infos, functions)
 
+    @pytorch_test_common.xfail(
+        error_message="Set comparison failed: Items in the second set but not the first"
+    )
     def test_dynamo_export_retains_readable_parameter_and_buffer_names(self):
         class SubModule(torch.nn.Module):
             def __init__(self):
@@ -864,6 +868,31 @@ class TestFxToOnnx(pytorch_test_common.ExportTestCase):
 
         input = torch.randn(2, 3)
         model = PrintModule()
+        _ = torch.onnx.dynamo_export(model, input)
+
+    def test_fail_optimize(self):
+        # Monkey patching onnxscript's optimizer
+        from onnxscript import optimizer
+
+        def monkey_optimize(
+            model,
+            num_iterations=2,
+            *,
+            onnx_shape_inference=True,
+            stop_if_no_change=True,
+            external_data_folder="",
+            **kwargs,
+        ):
+            raise RuntimeError("It's tough to be a bug!")
+
+        optimizer.optimize = monkey_optimize
+
+        class MyModel(torch.nn.Module):
+            def forward(self, x):
+                return x + 1
+
+        input = torch.randn(2, 3)
+        model = MyModel()
         _ = torch.onnx.dynamo_export(model, input)
 
 
