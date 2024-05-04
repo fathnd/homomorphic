@@ -30,7 +30,7 @@ from functools import partial
 from torch import multiprocessing as mp
 from torch.testing import make_tensor
 from torch.testing._internal.common_optimizers import (
-    optim_db, optims)
+    optim_db, optims, _get_optim_inputs_including_global_cliquey_kwargs)
 
 from torch.testing._internal.common_utils import (  # type: ignore[attr-defined]
     TEST_WITH_TORCHINDUCTOR, TEST_WITH_ROCM, run_tests, IS_JETSON,
@@ -5879,8 +5879,12 @@ else:
 
                 self.assertEqual(c, s, atol=atol, rtol=1e-05)
 
-    # Compares no scaling + no autocasting against scaling + autocasting.
-    def _grad_scaling_autocast_test(self, *, device="cuda", atol=1e-3, optimizer_ctor=torch.optim.SGD, optimizer_kwargs=None):
+    @onlyNativeDeviceTypes
+    @optims(
+        [optim for optim in optim_db if optim.optim_cls in [torch.optim.AdamW, torch.optim.Adam, torch.optim.SGD]],
+        dtypes=[torch.float32]
+    )
+    def test_grad_scaling_autocast(self, device, dtype, optim_info):
         try_pickle = False
 
         def run(device, data, model, optimizer, scaler, loss_fn, skip_iter, try_scaling_api):
@@ -5904,34 +5908,31 @@ else:
                         optimizer.step()
             return scaler
 
-        # NOTE(mkozuki): With current way of testing, `torch.optim.Adam` is failing in spite of `foreach` and `fused`.
-        #   Giving some flexibility to this test might help.
-        context = contextlib.nullcontext
-        if optimizer_ctor in (torch.optim.Adam, torch.optim.AdamW):
-            from functools import partial
-            context = partial(self.assertRaises, AssertionError)
-        with context():
-            # sets atol=1e-3 because we're comparing pure fp32 arithmetic vs a mixture of fp16 and fp32
-            self._run_scaling_case(
-                device, run, unskipped=3, skipped=1, atol=atol, optimizer_ctor=optimizer_ctor, optimizer_kwargs=optimizer_kwargs,
-            )
-            # this will be picked up by try_pickle within run():
-            try_pickle = True
-            self._run_scaling_case(
-                device, run, unskipped=3, skipped=1, atol=atol, optimizer_ctor=optimizer_ctor, optimizer_kwargs=optimizer_kwargs,
-            )
-
-    @optims(
-        [optim for optim in optim_db if optim.optim_cls in [torch.optim.AdamW, torch.optim.Adam, torch.optim.SGD]],
-        dtypes=[torch.float32]
-    )
-    def test_grad_scaling_autocast(self, device, dtype, optim_info):
-        device = torch.device(device)
         optimizer_ctor = optim_info.optim_cls
-        self._grad_scaling_autocast_test(device=device.type, optimizer_ctor=optimizer_ctor)
-        self._grad_scaling_autocast_test(device=device.type, optimizer_ctor=optimizer_ctor, optimizer_kwargs={"foreach": True})
-        if device.type == "cuda":
-            self._grad_scaling_autocast_test(device=device.type, optimizer_ctor=optimizer_ctor, optimizer_kwargs={"fused": True})
+        all_optim_inputs = _get_optim_inputs_including_global_cliquey_kwargs(
+            device, dtype, optim_info, skip=("differentiable"))
+
+        # Compares no scaling + no autocasting against scaling + autocasting.
+        for optim_input in all_optim_inputs:
+
+            # NOTE(mkozuki): With current way of testing, `torch.optim.Adam` is failing in spite of `foreach` and `fused`.
+            #   Giving some flexibility to this test might help.
+            context = contextlib.nullcontext
+            if optimizer_ctor in (torch.optim.Adam, torch.optim.AdamW):
+                from functools import partial
+                context = partial(self.assertRaises, AssertionError)
+            with context():
+                # sets atol=1e-3 because we're comparing pure fp32 arithmetic vs a mixture of fp16 and fp32
+                self._run_scaling_case(
+                    device, run, unskipped=3, skipped=1, atol=1e-3,
+                    optimizer_ctor=optimizer_ctor, optimizer_kwargs=optim_input.kwargs,
+                )
+                # this will be picked up by try_pickle within run():
+                try_pickle = True
+                self._run_scaling_case(
+                    device, run, unskipped=3, skipped=1, atol=1e-3,
+                    optimizer_ctor=optimizer_ctor, optimizer_kwargs=optim_input.kwargs,
+                )
 
     # Make sure that the parameters become nonsense when scaled gradients are finite
     # but they get invalidated before `optimizer.step`, after `GradScaler.unscale_`
@@ -5942,38 +5943,32 @@ else:
         dtypes=[torch.float32]
     )
     def test_params_invalidated_with_grads_invalidated_between_unscale_and_step(self, device, dtype, optim_info):
-        device = torch.device(device)
         optimizer_ctor = optim_info.optim_cls
-        for optimizer_kwargs in (
-                {"foreach": False, "fused": False},
-                {"foreach": True, "fused": False},
-                {"foreach": False, "fused": True},
-        ):
-            with self.subTest(optimizer=optimizer_ctor, optimizer_kwargs=optimizer_kwargs):
-                self._test_grads_invalidated_between_unscale_and_step(device.type, optimizer_ctor, optimizer_kwargs)
+        all_optim_inputs = _get_optim_inputs_including_global_cliquey_kwargs(
+            device, dtype, optim_info, skip=("differentiable"))
 
-    def _test_grads_invalidated_between_unscale_and_step(self, device, optimizer_ctor, optimizer_kwargs):
-        model, _, optimizer, _, data, loss_fn, _ = _create_scaling_case(
-            device, optimizer_ctor=optimizer_ctor, optimizer_kwargs=optimizer_kwargs,
-        )
-        scaler = torch.GradScaler(device=device, init_scale=128.0)
+        for optim_input in all_optim_inputs:
+            model, _, optimizer, _, data, loss_fn, _ = _create_scaling_case(
+                device, optimizer_ctor=optimizer_ctor, optimizer_kwargs=optim_input.kwargs,
+            )
+            scaler = torch.GradScaler(device=device, init_scale=128.0)
 
-        for input, target in data:
-            optimizer.zero_grad()
-            with torch.autocast(device_type=device, dtype=torch.half):
-                output = model(input)
-                loss = loss_fn(output, target)
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
+            for input, target in data:
+                optimizer.zero_grad()
+                with torch.autocast(device_type=device, dtype=torch.half):
+                    output = model(input)
+                    loss = loss_fn(output, target)
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
 
-            # deliberately break grads
-            for j, param in enumerate(model.parameters()):
-                param.grad.copy_(torch.inf if j % 2 else torch.nan)
+                # deliberately break grads
+                for j, param in enumerate(model.parameters()):
+                    param.grad.copy_(torch.inf if j % 2 else torch.nan)
 
-            scaler.step(optimizer)
-            scaler.update()
+                scaler.step(optimizer)
+                scaler.update()
 
-        self.assertTrue(all((p.isnan().any() or p.isinf().any()) for p in model.parameters()))
+            self.assertTrue(all((p.isnan().any() or p.isinf().any()) for p in model.parameters()))
 
     @onlyNativeDeviceTypes
     def test_grad_scale_will_not_overflow(self, device):
