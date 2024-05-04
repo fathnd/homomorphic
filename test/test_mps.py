@@ -61,6 +61,14 @@ _ref_test_ops = tuple(
     )
 )
 
+def xfailIf(condition):
+    def wrapper(func):
+        if condition:
+            return unittest.expectedFailure(func)
+        else:
+            return func
+    return wrapper
+
 def mps_ops_grad_modifier(ops):
     XFAILLIST_GRAD = {
 
@@ -896,7 +904,7 @@ def mps_ops_modifier(ops):
             'stft': None,
             # Error in TestConsistencyCPU.test_output_match_isin_cpu_int32,
             # not reproducible in later OS. Added assert to op if used in < 14.0
-            'isin': None,
+            'isin': [torch.int32],
         })
 
     UNDEFINED_XFAILLIST = {
@@ -8172,7 +8180,6 @@ class TestLogical(TestCaseMPS):
 
         [helper(dtype) for dtype in [torch.float32, torch.float16, torch.int32, torch.int16, torch.uint8, torch.int8, torch.bool]]
 
-    @unittest.skipIf(product_version < 14.0, "Skipped on MacOS < 14.0")
     def test_isin(self):
         def helper(dtype):
             shapes = [([2, 5], [3, 5, 2]), ([10, 3, 5], [20, 1, 3]),
@@ -8197,9 +8204,13 @@ class TestLogical(TestCaseMPS):
                     mps_out = torch.isin(A_mps, B_mps, invert=inverted)
                     self.assertEqual(mps_out, cpu_ref)
 
-        [helper(dtype) for dtype in [torch.float32, torch.float16, torch.int32, torch.int16, torch.uint8, torch.int8]]
+        dtypes = [torch.float32, torch.float16, torch.int32, torch.int16, torch.uint8, torch.int8]
+        if product_version < 14.0:
+            # Int32 expected to fail on MacOS < 14.0
+            dtypes.remove(torch.int32)
 
-    @unittest.skipIf(product_version < 14.0, "Skipped on MacOS < 14.0")
+        [helper(dtype) for dtype in dtypes]
+
     def test_isin_asserts(self):
         A = torch.randn(size=[1, 4], device='mps', dtype=torch.float32)
         B = torch.randn(size=[1, 4], device='mps', dtype=torch.float16)
