@@ -15,12 +15,14 @@ TORCH_API std::unordered_map<Value*, Value*> BlockToONNX(
     Block* new_block,
     ::torch::onnx::OperatorExportTypes operator_export_type,
     std::unordered_map<Value*, Value*>& env,
+    py::set& values_in_env,
     bool is_sub_block = false);
 TORCH_API void NodeToONNX(
     Node* old_node,
     Block* new_block,
     ::torch::onnx::OperatorExportTypes operator_export_type,
-    std::unordered_map<Value*, Value*>& env);
+    std::unordered_map<Value*, Value*>& env,
+    py::set& values_in_env);
 TORCH_API void RemovePrintOps(std::shared_ptr<Graph>& graph);
 TORCH_API void PreprocessCaffe2Ops(std::shared_ptr<Graph>& graph);
 
