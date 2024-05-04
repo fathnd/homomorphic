@@ -1263,7 +1263,7 @@ void ProcessGroupNCCL::heartbeatMonitor() {
                 vec.size() == sizeof(int),
                 "Invalid size for the timeout rank ID");
             std::memcpy(&timeOutRank, vec.data(), vec.size());
-          } catch (const std::exception& e) {
+          } catch (const std::exception&) {
             LOG(ERROR)
                 << "Failed to get timeout rank ID from the global store.";
           }
