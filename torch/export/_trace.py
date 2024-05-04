@@ -1030,7 +1030,7 @@ def _export(
         fake_params_buffers = make_fake_params_buffers(
             fake_mode, _get_params_buffers(mod)
         )
-        with fake_mode:
+        with fake_mode, torch.fx.experimental.symbolic_shapes.DataDependentErrorHandler():
             ep_non_strict = _export_non_strict(
                 mod,
                 fake_args,
