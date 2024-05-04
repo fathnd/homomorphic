@@ -304,11 +304,11 @@ bool check_cudnn_tensor_shapes(sdp_params const& params, bool debug) {
   const auto num_heads{params.query.sym_size(1)},
       query_lengths{params.query.sym_size(2)},
       head_dim{params.query.sym_size(3)};
-  const bool ok = query_lengths % 64 == 0 && head_dim % 64 == 0;
+  const bool ok = query_lengths % 64 == 0 && head_dim <= 128 && head_dim % 8 == 0;
   if (!ok) {
     if (debug) {
       TORCH_WARN(
-          "CuDNN requires sequence length and head dim to be divisible by 64. Got sequence length: ",
+          "CuDNN requires sequence length divisible by 64 and head dim to be divisible by 8 and <= 128. Got sequence length: ",
           query_lengths,
           ", head dim: ",
           head_dim,
@@ -364,17 +364,6 @@ bool check_cudnn_hardware_support(sdp_params const& params, bool debug) {
   return true;
 }
 
-bool check_is_causal(sdp_params const& params, bool debug) {
-  // Check that the input is causal
-  if (!params.is_causal) {
-    if (debug) {
-      TORCH_WARN("CuDNN requires is_causal=True.");
-    }
-    return false;
-  }
-  return true;
-}
-
 bool check_for_nested_inputs(sdp_params const& params, bool debug) {
   // Check that the input is nested
   if (has_for_nested_inputs(params)) {
@@ -414,16 +403,6 @@ bool check_runtime_enabled_cudnn(sdp_params const& params, bool debug) {
   return true;
 }
 
-bool check_cudnn_requires_grad(sdp_params const& params, bool debug) {
-  // Check that the input is causal
-  if (input_requires_grad(params)) {
-    if (debug) {
-      TORCH_WARN("CuDNN does not currently support inputs with requires_grad=True.");
-    }
-    return false;
-  }
-  return true;
-}
 
 } // namespace
 
@@ -434,14 +413,14 @@ bool can_use_cudnn_attention(const sdp_params& params, bool debug) {
   constexpr auto general_constraints =
       array_of<bool (*)(sdp_params const&, bool)>(
           check_runtime_enabled_cudnn,
-          check_cudnn_hardware_support);
-          // check_all_tensors_on_device,
-          // check_cudnn_tensor_shapes,
+          check_cudnn_hardware_support,
+          check_all_tensors_on_device,
+          check_cudnn_tensor_shapes,
+          check_for_nested_inputs,
+          check_for_attn_mask,
+          check_dtypes_low_precision
+	  );
           // check_cudnn_layout,
-          // check_is_causal,
-          // check_for_nested_inputs,
-          // check_cudnn_requires_grad,
-          // check_dtypes_low_precision
   for (auto& constraint : general_constraints) {
     if (!constraint(params, debug)) {
       return false;
