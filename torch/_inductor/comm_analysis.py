@@ -46,9 +46,7 @@ def get_collective_type(node: ir.IRNode) -> NCCL_COLL:
         elif "reduce_scatter" in kernel_name:
             return NCCL_COLL.REDUCE_SCATTER
         else:
-            raise Exception(  # noqa: TRY002
-                f"Unsupported collective kernel: {kernel_name}"
-            )  # noqa: TRY002
+            raise TypeError(f"Unsupported collective kernel: {kernel_name}")
 
     if isinstance(node, (ir.AllReduce, ir.AllReduceCoalesced)):
         return NCCL_COLL.ALL_REDUCE
@@ -57,7 +55,7 @@ def get_collective_type(node: ir.IRNode) -> NCCL_COLL:
     elif isinstance(node, (ir.ReduceScatterTensor, ir.ReduceScatterTensorCoalesced)):
         return NCCL_COLL.REDUCE_SCATTER
     else:
-        raise Exception(f"Unsupported collective type: {node}")  # noqa: TRY002
+        raise TypeError(f"Unsupported collective type: {node}")
 
 
 def get_collective_input_size_bytes(node: ir.IRNode) -> int:
