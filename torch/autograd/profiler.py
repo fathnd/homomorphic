@@ -335,7 +335,15 @@ class profile:
             if hasattr(device_module, "synchronize"):
                 device_module.synchronize()
 
+        old_function_events = []
+        if self.function_events:
+            old_function_events = self.function_events
+
         t0 = perf_counter_ns()
+
+        # TODO we are overwriting the kineto results here!
+        # We should combine previous results with the new results otherwise only
+        # the last "repeat" will be recorded in the trace
         self.kineto_results = _disable_profiler()
         t1 = perf_counter_ns()
         self._stats.profiler_disable_call_duration_us = int((t1 - t0) / 1000)
@@ -362,6 +370,8 @@ class profile:
         self._stats.profiling_window_duration_sec = (
             (self.profiling_end_time_ns - self.profiling_start_time_ns) * 1.0 / 1e9
         )
+        for evt in old_function_events:
+            self.function_events.append(evt)
         return False
 
     def __repr__(self):
