@@ -8,7 +8,7 @@ namespace caffe2 {
 // Static definition of GPU warp size for unrolling and code generation
 
 #if defined(USE_ROCM)
-constexpr int kWarpSize = warpSize;   // = 64 (Defined in hip_runtime.h)
+constexpr int kWarpSize = __AMDGCN_WAVEFRONT_SIZE;   // = 64 (Defined in hip_runtime.h)
 #else
 constexpr int kWarpSize = 32;
 #endif // __CUDA_ARCH__
