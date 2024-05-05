@@ -850,6 +850,7 @@ class Graph:
         self._codegen = CodeGen()
         self._co_fields : Dict[str, Any] = {}
         self._find_nodes_lookup_table = _FindNodesLookupTable()
+        self._create_node_hook = None
 
     @property
     def owning_module(self):
@@ -937,6 +938,7 @@ class Graph:
         g = Graph(tracer_cls=self._tracer_cls)
         output_vals = g.graph_copy(self, val_map=memo, return_output_node=True)
         g._codegen = copy.deepcopy(self._codegen)
+        g._create_node_hook = copy.deepcopy(self._create_node_hook)
         assert isinstance(output_vals, tuple)
         output_val, old_output_node = output_vals
         new_output_node = g.output(output_val, type_expr=getattr(old_output_node, 'type', None))
@@ -984,12 +986,29 @@ class Graph:
         name = self._graph_namespace.create_name(candidate, None)
         n = Node(self, name, op, target, args, kwargs, type_expr)
 
+        if self._create_node_hook is not None:
+            self._create_node_hook(n)
+
         self._graph_namespace.associate_name_with_obj(name, n)
 
         self._insert(n)
         self._find_nodes_lookup_table.insert(n)
         self._len += 1
         return n
+
+    @contextlib.contextmanager
+    def _set_create_node_hook(self, f):
+        """
+        Takes a callable which will be called after we create a new node. The
+        callable takes the newly created node as input and returns None.
+        """
+        assert callable(f), "create_node hook must be a callable."
+        prev, self._create_node_hook = self._create_node_hook, f
+        try:
+            yield
+        finally:
+            self._create_node_hook = prev
+
 
     @compatibility(is_backward_compatible=False)
     def process_inputs(self, *args):
