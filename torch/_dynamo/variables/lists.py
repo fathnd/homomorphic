@@ -5,7 +5,7 @@ import functools
 import inspect
 import operator
 import types
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.fx
@@ -693,6 +693,34 @@ class ListIteratorVariable(VariableTracker):
 
 class TupleIteratorVariable(ListIteratorVariable):
     pass
+
+
+class RangeIteratorVariable(ListIteratorVariable):
+    """We only use this over ListIteratorVariable to hold the original range information."""
+
+    def __init__(
+        self,
+        *args,
+        range_object: range,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        assert isinstance(range_object, range)
+        self.range_object = range_object
+        self.mutable_local = MutableLocal()
+
+    def next_variables(self, tx) -> "Tuple[VariableTracker, ListIteratorVariable]":
+        """
+        We only attempt converting the loop body once. So further iterations,
+        just return the original list iterator.
+        """
+        if self.index >= len(self.items):
+            raise StopIteration
+        items = [ConstantVariable.create(num) for num in self.range_object]
+        next_iter = ListIteratorVariable(
+            items, self.index + 1, mutable_local=MutableLocal()
+        )
+        return items[self.index], next_iter
 
 
 class RestrictedListSubclassVariable(ListVariable):

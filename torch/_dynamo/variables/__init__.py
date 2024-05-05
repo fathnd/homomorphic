@@ -36,6 +36,7 @@ from .functions import (
     UserMethodVariable,
 )
 from .higher_order_ops import (
+    CannotConvertRangeToHigherOrder,
     FunctorchHigherOrderVariable,
     TorchHigherOrderOperatorVariable,
 )
@@ -52,6 +53,7 @@ from .lists import (
     ListIteratorVariable,
     ListVariable,
     NamedTupleVariable,
+    RangeIteratorVariable,
     RangeVariable,
     RestrictedListSubclassVariable,
     SliceVariable,
@@ -111,6 +113,7 @@ __all__ = [
     "ContextWrappingVariable",
     "CountIteratorVariable",
     "CustomizedDictVariable",
+    "CannotConvertLoop",
     "CycleIteratorVariable",
     "DataClassVariable",
     "DefaultDictVariable",
@@ -137,6 +140,7 @@ __all__ = [
     "OptimizerVariable",
     "PlacementVariable",
     "PythonModuleVariable",
+    "CannotConvertRangeToHigherOrder",
     "RangeVariable",
     "RegexPatternVariable",
     "RemovableHandleVariable",

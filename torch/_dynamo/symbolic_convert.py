@@ -86,6 +86,11 @@ from .variables.functions import (
     UserFunctionVariable,
     UserMethodVariable,
 )
+
+from .variables.higher_order_ops import (
+    CannotConvertRangeToHigherOrder,
+    RangeHigherOrderVariable,
+)
 from .variables.lists import (
     BaseListVariable,
     ListIteratorVariable,
@@ -1210,9 +1215,47 @@ class InstructionTranslatorBase(
         if preserve_tos:
             self.push(tos)  # type: ignore[possibly-undefined]
 
-    def FOR_ITER(self, inst):
+    def FOR_ITER(self, inst: Instruction):
         it = self.pop().realize()
+
         try:
+            if config.convert_for_loops_to_functions and isinstance(
+                it, variables.RangeIteratorVariable
+            ):
+                try:
+                    # Converts a loop to a function body, to benefit
+                    # from function compilation caching.
+                    assert inst.target is not None
+                    op = RangeHigherOrderVariable.make_self(
+                        self,
+                        it,
+                        self.f_globals,
+                        self.f_code,
+                        self.instructions[
+                            self.instruction_pointer : self.indexof[inst.target]
+                        ],
+                        self.symbolic_locals,
+                    )
+
+                    new_locals = op.to_function(self)
+                    args = [
+                        wrap_fx_proxy(self, loc)
+                        if isinstance(loc, torch.fx.Proxy)
+                        else loc
+                        for loc in new_locals
+                    ]
+                    for name, v in zip(self.f_code.co_varnames, args):
+                        if isinstance(v, RangeHigherOrderVariable.UnitializedVariable):
+                            continue
+                        self.symbolic_locals[name] = v
+
+                    # Skip the rest of the loop completely, now that we transformed it.
+                    # Also pop off the iterator.
+                    raise StopIteration
+                except CannotConvertRangeToHigherOrder:
+                    # Cannot convert - fall through and use standard
+                    # loop iteration.
+                    pass
             val = it.next_variable(self)
             self.push(it)
             self.push(val)
