@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 import torch
 from torch._inductor.virtualized import V
 from .. import config as inductor_config
-from ..codegen.cuda.gemm_template import CUTLASSGemmTemplate
+from ..codegen.cuda.gemm_template import CKGemmTemplate, CUTLASSGemmTemplate
 from ..codegen.wrapper import WrapperCodeGen
 from ..ir import FlexibleLayout
 from ..lowering import register_lowering
@@ -17,6 +17,7 @@ from ..select_algorithm import (
 )
 from ..utils import (
     use_aten_gemm_kernels,
+    use_ck_template,
     use_cutlass_template,
     use_max_autotune,
     use_triton_template,
@@ -149,6 +150,11 @@ def tuned_mm(mat1, mat2, *, layout=None):
 
     if static_shape and is_nonzero and use_cutlass_template(layout, m, n, k):
         CUTLASSGemmTemplate.add_cutlass_gemm_choices(choices, layout, [mat1, mat2])
+
+    if static_shape and is_nonzero and use_ck_template(layout, m, n, k):
+        CKGemmTemplate.add_ck_gemm_choices(
+            choices, layout, [mat1, mat2]
+        )
 
     if len(choices) == 0 and not use_aten_gemm_kernels():
         log.warning("No choices for GEMM, using ATen backend as fallback")

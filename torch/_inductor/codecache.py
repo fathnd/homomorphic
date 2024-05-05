@@ -30,7 +30,7 @@ from bisect import bisect_right
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from copy import copy
 from ctypes import c_void_p, cdll, CDLL
-from functools import partial
+from functools import lru_cache, partial
 from pathlib import Path
 from threading import Thread
 from time import sleep, time
@@ -2635,40 +2635,125 @@ def _nvcc_compiler_options() -> List[str]:
     return options
 
 
+def _ck_include_paths() -> List[str]:
+    from torch.utils import cpp_extension
+    rocm_include = os.path.join(config.rocm.rocm_home, 'include') if config.rocm.rocm_home else f"{cpp_extension._join_rocm_home('include')}"
+    ck_include = os.path.join(config.rocm.ck_dir, 'include')
+    return [rocm_include, ck_include]
+
+
+def _hip_lib_options() -> List[str]:
+    from torch.utils import cpp_extension
+
+    rocm_lib_dir = os.path.join(config.rocm.rocm_home, 'include') if config.rocm.rocm_home else cpp_extension._join_rocm_home('lib')
+    hip_lib_dir = os.path.join(config.rocm.rocm_home, 'hip', 'lib') if config.rocm.rocm_home else cpp_extension._join_rocm_home('hip', 'lib')
+
+    return [
+        f"-L{rocm_lib_dir}",
+        f"-L{hip_lib_dir}",
+        "-lamdhip64",
+    ]
+
+
+def _hipcc_host_compiler_options() -> List[str]:
+    return []
+
+
+def _hipcc_device_compiler_options() -> List[str]:
+    opts = [
+        config.rocm.compile_opt_level,
+        "-x", 
+        "hip",
+        "-std=c++17",
+        f"--offload-arch={';'.join(config.rocm.arch) or 'native'}",
+        "-fno-gpu-rdc",
+        "-fPIC",
+        "-mllvm",
+        "-amdgpu-early-inline-all=true",
+        "-mllvm",
+        "-amdgpu-function-calls=false",
+        "-mllvm",
+        "-enable-post-misched=0",
+    ]
+    if config.rocm.is_debug:
+        opts += ["-DDEBUG_LOG=1", "-g"]
+    if config.rocm.save_temps:
+        opts += ["--save-temps=obj"]
+    if config.rocm.print_kernel_resource_usage:
+        opts += ["-Rpass-analysis=kernel-resource-usage"]
+    if config.rocm.flush_denormals:
+        opts += ["-fgpu-flush-denormals-to-zero"]
+    if config.rocm.use_fast_math:
+        opts += ["-ffast-math"]
+    return opts
+
+
+def _hip_compiler() -> Optional[str]:
+    if is_linux():
+        if config.rocm.rocm_home:
+            return os.path.join(config.rocm.rocm_home, 'llvm', 'bin', 'clang')
+        try:
+            from torch.utils import cpp_extension
+            return cpp_extension._join_rocm_home('llvm', 'bin', 'clang')
+        except OSError:
+            # neither config.rocm.rocm_home nor env variable ROCM_HOME are set
+            return "clang"
+    return None
+
+
+@lru_cache(None)
+def _hip_compiler_version() -> Optional[str]:
+    hip_compiler = _hip_compiler()
+    if not hip_compiler:
+        return None
+    try:
+        import subprocess
+        return subprocess.check_output([hip_compiler, "--version"], text=True)
+    except subprocess.CalledProcessError:
+        return None
+
+
 def cuda_compile_command(
     src_files: List[str],
     dst_file: str,
     dst_file_ext: str,
     extra_args: Optional[List[str]] = None,
 ) -> str:
-    if extra_args is None:
-        extra_args = []
-    include_paths = _cutlass_include_paths()
-    cuda_lib_options = _cuda_lib_options()
-    nvcc_host_compiler_options = _nvcc_host_compiler_options()
-    nvcc_compiler_options = _nvcc_compiler_options()
+    if torch.version.cuda:
+        include_paths = _cutlass_include_paths()
+        lib_options = _cuda_lib_options()
+        host_compiler_options = _nvcc_host_compiler_options()
+        device_compiler_options = _nvcc_compiler_options()
+        compiler = _cuda_compiler()
+    elif torch.version.hip:
+        include_paths = _ck_include_paths()
+        lib_options = _hip_lib_options()
+        host_compiler_options = _hipcc_host_compiler_options()
+        device_compiler_options = _hipcc_device_compiler_options()
+        compiler = _hip_compiler()
+    else:
+        return ""
     options = (
-        nvcc_compiler_options
-        + extra_args
+        device_compiler_options
+        + (extra_args if extra_args else [])
         + [
             f"-Xcompiler {opt}" if "=" in opt else f"-Xcompiler={opt}"
-            for opt in nvcc_host_compiler_options
+            for opt in host_compiler_options
         ]
         + ["-I" + path for path in include_paths]
-        + cuda_lib_options
+        + lib_options
     )
     src_file = " ".join(src_files)
     res = ""
     if dst_file_ext == "o":
-        res = f"{_cuda_compiler()} {' '.join(options)} -c -o {dst_file} {src_file}"
+        res = f"{compiler} {' '.join(options)} -c -o {dst_file} {src_file}"
     elif dst_file_ext == "so":
         options.append("-shared")
-        res = f"{_cuda_compiler()} {' '.join(options)} -o {dst_file} {src_file}"
+        res = f"{compiler} {' '.join(options)} -o {dst_file} {src_file}"
     elif dst_file_ext == "exe":
-        res = f"{_cuda_compiler()} {' '.join(options)} -o {dst_file} {src_file}"
+        res = f"{compiler} {' '.join(options)} -o {dst_file} {src_file}"
     else:
         raise NotImplementedError(f"Unsupported output file suffix {dst_file_ext}!")
-    log.debug("CUDA command: %s", res)
     return res
 
 
@@ -2719,6 +2804,9 @@ class DLLWrapper:
 
         def _wrapped_func(*args):
             err = method(*args)
+            if err == -23:
+                # magic spell to assign +inf to benchmarking time in select_algorithm.py:1052 (2/2)
+                raise RuntimeError(f"Error in function: {method.__name__}: invalid argument for gemm")
             if err:
                 raise RuntimeError(f"Error in function: {method.__name__}")
 
@@ -2744,6 +2832,9 @@ class CUDACodeCache:
     cache: Dict[str, CacheEntry] = dict()
     cache_clear = staticmethod(cache.clear)
     _SOURCE_CODE_SUFFIX = "cu"
+
+    if torch.version.hip:
+        log.debug(f"HIP compiler version:\n{_hip_compiler_version()}")
 
     @classmethod
     def write(cls, source_code, dst_file_ext) -> Tuple[str, str]:
@@ -2781,12 +2872,12 @@ class CUDACodeCache:
                         [input_path], output_path, dst_file_ext, extra_args
                     )
                     start_time = time()
-                    log.debug("CUDA Compilation: %s", cmd)
                     cmd_parts = cmd.split(" ")
                     try:
-                        subprocess.check_output(
-                            cmd_parts, stderr=subprocess.STDOUT, env=os.environ
+                        output = subprocess.check_output(
+                            cmd_parts, stderr=subprocess.STDOUT, text=True, env=os.environ
                         )
+                        log.debug(f"CUDA compilation output: {output}")
                     except subprocess.CalledProcessError as error:
                         raise exc.CUDACompileError(cmd_parts, error.output) from error
                     end_time = time()
