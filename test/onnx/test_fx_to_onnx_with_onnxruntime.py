@@ -16,6 +16,7 @@ import parameterized  # type: ignore[import]
 import pytorch_test_common
 import torch
 import torch.onnx
+
 import transformers  # type: ignore[import]
 from torch import nn
 
@@ -632,7 +633,7 @@ class TestFxToOnnxWithOnnxRuntime(onnx_test_common._TestONNXRuntime):
         )
 
     @pytorch_test_common.xfail_if_model_type_is_exportedprogram(
-        error_message="Unsupported FX nodes: {'call_function': ['aten._assert_async.msg']}.",
+        error_message="Unsupported FX nodes: {'call_function': ['aten._assert_scalar.default']}.",
         reason="https://github.com/pytorch/pytorch/issues/112622",
     )
     def test_operator_with_scalar_output(self):
