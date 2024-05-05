@@ -200,6 +200,7 @@ def _flatten_dynamic_shapes(
 def produce_guards_and_solve_constraints(
     fake_mode: FakeTensorMode,
     gm: torch.fx.GraphModule,
+    dynamic_shapes: Union[Dict[str, Any], Tuple[Any], List[Any]],
     equalities_inputs: EqualityConstraint,
     original_signature: inspect.Signature,
 ):
@@ -243,7 +244,10 @@ def produce_guards_and_solve_constraints(
     dim_constraints.remove_redundant_dynamic_results()
     forced_specializations = dim_constraints.forced_specializations()
     msg = dim_constraints.prettify_results(
-        original_signature, constraint_violation_error, forced_specializations
+        original_signature,
+        dynamic_shapes,
+        constraint_violation_error,
+        forced_specializations,
     )
     if constraint_violation_error:
         constraint_violation_error.args = (constraint_violation_error.args[0] + msg,)

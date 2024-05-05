@@ -933,6 +933,35 @@ class TestExport(TestCase):
             6,
         )
 
+    def test_specialize_derived_dim_roots(self):
+        # dim & derived dim both specialize
+        class Foo(torch.nn.Module):
+            def forward(self, x, y):
+                return x.reshape([-1]) + y
+
+        dy = Dim("dy", min=6)
+        x, y = torch.randn(6, 2), torch.randn(12)
+        dynamic_shapes = {
+            "x": (dy - 6, 2),
+            "y": (dy,),
+        }
+        try:
+            export(Foo(), (x, y), dynamic_shapes=dynamic_shapes)
+            raise Exception(
+                "export() call should have failed with dynamic shapes error."
+            )
+        except torch._dynamo.exc.UserError as exc:
+            expected_error_msg = (
+                "Specializations unexpectedly required \(dy\)!(.*\n)*.*"
+                ".*dy - 6.*must be specialized to 6 because the guards generated for it are too complex(.*\n)*.*"
+                "Suggested fixes(.*\n)*.*"
+                ".*dy = None(.*\n)*.*"
+            )
+            self.assertTrue(re.search(expected_error_msg, exc.args[0]) is not None)
+            self.assertTrue(
+                "dy - 6 = 6" not in exc.args[0]
+            )  # don't suggest fix for non-root dim
+
     def test_derived_dim_out_of_order_simplified(self):
         _dimz = torch.export.Dim("_dimz", min=6, max=8)
         dimy = _dimz - 1
@@ -944,22 +973,25 @@ class TestExport(TestCase):
                 return x + y[1:] + z[2:]
 
         foo = Foo()
-
         u, v, w = torch.randn(5), torch.randn(6), torch.randn(7)
-        with self.assertRaisesRegex(
-            torch._dynamo.exc.UserError,
-            (
-                "Constraints violated \\(dimz\\)!(.*\n)*.*"
-                "The values of dimz.*must always be related to the values of _dimz - 2.*by.*(.*\n)*.*"
-                "Suggested fixes:(.*\n)*.*"
-                "dimz = _dimz"
-            ),
-        ):
+        try:
             export(
                 foo,
                 (u, v, w),
                 dynamic_shapes=({0: dimx}, {0: dimy}, {0: dimz}),
             )
+        except torch._dynamo.exc.UserError as exc:
+            expected_error_msg = (
+                "Constraints violated \(dimz\)!(.*\n)*.*"
+                "The values of dimz.*must always be related to the values of _dimz - 2.*by.*(.*\n)*.*"
+                "Suggested fixes:(.*\n)*.*"
+                "dimz = _dimz"
+            )
+            self.assertTrue(re.search(expected_error_msg, exc.args[0]) is not None)
+            # don't suggest fix for non-root dims, and no need to update root here
+            self.assertTrue("_dimz - 2 = Dim(" not in exc.args[0])
+            self.assertTrue("_dimz - 1 = _dimz - 1" not in exc.args[0])
+            self.assertTrue("_dimz = Dim(" not in exc.args[0])
 
         dimz = dimx + 2  # works, effectively = _dimz
         ep = export(

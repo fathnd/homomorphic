@@ -1334,6 +1334,16 @@ def cast_symbool_to_symint_guardless(symbool: torch.SymBool) -> torch.SymInt:
     int_sym = _sympy_cast_symbool_to_symint_guardless(symbool.node.expr)
     return symbool.node.shape_env.create_symintnode(int_sym, hint=int(symbool.node.require_hint()) if has_hint(symbool) else None)
 
+# use class name to avoid circular imports
+def _is_derived_dim(dim):
+    return dim.__class__.__name__ == "_DerivedDim"
+
+def _is_dim(dim):
+    return dim.__class__.__name__ == "_Dim"
+
+def _solve_for_root(expr, val):
+    return int(sympy.solve(sympy.sympify(expr) - val)[0])
+
 SYMPY_INTERP = {
     'Abs': operator.abs,
     'Eq': operator.eq,
@@ -1879,9 +1889,76 @@ class DimConstraints:
                 dynamic_results.add(dc)
         self._dynamic_results = dynamic_results
 
+    def _process_derived_dim_roots(
+        self,
+        results: Dict[str, Dict[str, Any]],
+        name_to_dim: Dict[str, Any],
+    ) -> None:
+        '''
+        With suggested fixes for derived dims, roots can be swapped,
+        e.g. dx, dx - 1 -> dy + 1, dy. Here we don't want to print out the attached name,
+        since this leads to messages like "dx - 1 = Dim(...)".
+        Instead we evaluate the new root value, and remove results for its derivations.
+        '''
+        def _check_same_range(c, dim):
+            # returns True if c & dim are both min/max ranges with same values
+            return (
+                _is_dim(dim)
+                and ("min" in c or "max" in c)
+                and dim.min == c.get("min", 0)
+                and dim.max == c.get("max", sys.maxsize - 1)
+            )
+
+        # collect roots
+        modified_roots: Set[str] = set(
+            name_to_dim[k].root.__name__
+            for k in results
+            if _is_derived_dim(name_to_dim[k])
+        )
+
+        # evaluate each root for either concrete val or min/max range
+        modified_root_values: Dict[str, Dict[str, Any]] = {}
+        for root in modified_roots:
+            swapped_root = True
+            if root in results:
+                c = results[root]
+                if (
+                    ("min" in c or "max" in c)
+                    or isinstance(c["eq"], int)
+                ):  # root is unswapped, store value and continue
+                    modified_root_values[root] = c
+                    swapped_root = False
+
+            if swapped_root:
+                for k, c in results.items():
+                    dim = name_to_dim[k]
+                    if dim.__class__.__name__ == "_DerivedDim" and dim.root.__name__ == root:
+                        # if the result had specialized, the root would have also,
+                        # so only look for min/max root
+                        if "min" in c or "max" in c:
+                            result = {
+                                "min": _solve_for_root(k, c["min"]),
+                                "max": _solve_for_root(k, c["max"]),
+                            }
+                            if not _check_same_range(result, name_to_dim[root]):  # ignore if unchanged
+                                modified_root_values[root] = result
+                                break
+
+        # filter out derived dims with modified roots from results
+        for k in list(results.keys()):
+            if (
+                _is_derived_dim(name_to_dim[k])
+                and name_to_dim[k].root.__name__ in modified_roots
+            ):
+                del results[k]
+
+        # update results
+        results.update(modified_root_values)
+
     def prettify_results(
         self,
         original_signature: inspect.Signature,
+        dynamic_shapes: Union[Dict[str, Any], Tuple[Any], List[Any]],
         constraint_violation_error=None,
         forced_specializations=None,
     ):
@@ -1919,6 +1996,18 @@ class DimConstraints:
                     assert op == "=="
                     results[expr]["eq"] = digit
 
+            # retrieve dynamic shapes
+            name_to_dim = {}
+            for dim in pytree.tree_flatten(
+                dynamic_shapes,
+                is_leaf=lambda x: _is_derived_dim(x) or _is_dim(x),
+            )[0]:
+                if dim is None or isinstance(dim, int):
+                    continue
+                name_to_dim[dim.__name__] = dim
+                if _is_derived_dim(dim):
+                    name_to_dim[dim.root.__name__] = dim.root
+
             for s in self._static_results.union(self._dynamic_results):
                 t = transform(s)
                 if t == s:
@@ -1936,9 +2025,15 @@ class DimConstraints:
                     results[left]["eq"] = sympy.sympify(right)
 
             buf = ""
-            debug_names = set()
             if forced_specializations:
-                debug_names.update(k.split(" = ")[0] for k in forced_specializations.keys())
+                debug_names = set()
+                for k in forced_specializations:
+                    dim = name_to_dim[k.split(" = ")[0]]
+                    if _is_derived_dim(dim):
+                        debug_names.add(dim.root.__name__)
+                    else:
+                        debug_names.add(dim.__name__)
+
                 buf += (
                     f"Specializations unexpectedly required ({', '.join(debug_names)})! "
                     "For more information, run with TORCH_LOGS=\"+dynamic\".\n"
@@ -1946,30 +2041,17 @@ class DimConstraints:
                 for s, val in forced_specializations.items():
                     buf += f"  - {s} must be specialized to {val} because the guards generated for it are too complex.\n"
 
+            self._process_derived_dim_roots(results, name_to_dim)
+
             dims = []
             others = []
-            match = None
-            if constraint_violation_error:
-                match = re.search(r"Constraints violated \((.*)\)", constraint_violation_error.args[0])
-            if match is not None:
-                debug_names.update(match.expand(r'\1').split(', '))
 
             for k, c in sorted(results.items()):
-                # if k not in debug_names:
-                #     continue
                 if "eq" in c:
                     other = c["eq"]
                     if isinstance(other, int):
                         others.append(f"{k} = None  # {other}")
                     elif self._is_supported_equivalence(other):
-                        s = next(iter(other.free_symbols))
-                        if s not in results:
-                            modulus, remainder = sympy.polys.polytools.div(other, s)
-                            c_min = c.get("min", 2)
-                            min_ = math.ceil((c_min - remainder) / modulus)
-                            c_max = c.get("max", sys.maxsize - 1)
-                            max_ = math.floor((c_max - remainder) / modulus)
-                            dims.append(f"{s} = Dim('{s}', min={min_}, max={max_})  # {c_min} <= {other} <= {c_max}")
                         others.append(f"{k} = {other}")
                 else:
                     min_ = c.get("min", None)
@@ -1985,8 +2067,12 @@ class DimConstraints:
                     else:
                         dims.append(f"{k} = Dim('{k}')")
 
-            buf += "\nSuggested fixes:\n  "
-            buf += "\n  ".join(dims + others)
+            # results will get filtered out if no new suggestions,
+            # this can happen if guards are too complex.
+            # in that case don't suggest fix
+            if dims or others:
+                buf += "\nSuggested fixes:\n  "
+                buf += "\n  ".join(dims + others)
 
             return buf
 
