@@ -97,7 +97,6 @@ case "$image" in
     ANACONDA_PYTHON_VERSION=3.10
     GCC_VERSION=9
     PROTOBUF=yes
-    DB=yes
     KATEX=yes
     UCX_COMMIT=${_UCX_COMMIT}
     UCC_COMMIT=${_UCC_COMMIT}
@@ -110,7 +109,6 @@ case "$image" in
     ANACONDA_PYTHON_VERSION=3.10
     GCC_VERSION=9
     PROTOBUF=yes
-    DB=yes
     KATEX=yes
     UCX_COMMIT=${_UCX_COMMIT}
     UCC_COMMIT=${_UCC_COMMIT}
@@ -124,7 +122,6 @@ case "$image" in
     ANACONDA_PYTHON_VERSION=3.10
     GCC_VERSION=9
     PROTOBUF=yes
-    DB=yes
     KATEX=yes
     UCX_COMMIT=${_UCX_COMMIT}
     UCC_COMMIT=${_UCC_COMMIT}
@@ -137,7 +134,6 @@ case "$image" in
     ANACONDA_PYTHON_VERSION=3.10
     GCC_VERSION=9
     PROTOBUF=yes
-    DB=yes
     KATEX=yes
     UCX_COMMIT=${_UCX_COMMIT}
     UCC_COMMIT=${_UCC_COMMIT}
@@ -148,7 +144,6 @@ case "$image" in
     ANACONDA_PYTHON_VERSION=3.8
     CLANG_VERSION=10
     PROTOBUF=yes
-    DB=yes
     CONDA_CMAKE=yes
     ONNX=yes
     ;;
@@ -166,7 +161,6 @@ case "$image" in
     ANACONDA_PYTHON_VERSION=3.8
     CLANG_VERSION=10
     PROTOBUF=yes
-    DB=yes
     VULKAN_SDK_VERSION=1.2.162.1
     SWIFTSHADER=yes
     CONDA_CMAKE=yes
@@ -176,7 +170,6 @@ case "$image" in
     ANACONDA_PYTHON_VERSION=3.11
     CLANG_VERSION=10
     PROTOBUF=yes
-    DB=yes
     VULKAN_SDK_VERSION=1.2.162.1
     SWIFTSHADER=yes
     CONDA_CMAKE=yes
@@ -186,7 +179,6 @@ case "$image" in
     ANACONDA_PYTHON_VERSION=3.8
     GCC_VERSION=9
     PROTOBUF=yes
-    DB=yes
     CONDA_CMAKE=yes
     TRITON=yes
     ;;
@@ -194,7 +186,6 @@ case "$image" in
     ANACONDA_PYTHON_VERSION=3.8
     GCC_VERSION=9
     PROTOBUF=yes
-    DB=yes
     VISION=yes
     ROCM_VERSION=6.0
     NINJA_VERSION=1.9.0
@@ -205,7 +196,6 @@ case "$image" in
     ANACONDA_PYTHON_VERSION=3.8
     GCC_VERSION=9
     PROTOBUF=yes
-    DB=yes
     VISION=yes
     ROCM_VERSION=6.1
     NINJA_VERSION=1.9.0
@@ -216,7 +206,6 @@ case "$image" in
     ANACONDA_PYTHON_VERSION=3.8
     GCC_VERSION=11
     PROTOBUF=yes
-    DB=yes
     BASEKIT_VERSION=2024.0.0-49522
     NINJA_VERSION=1.9.0
     CONDA_CMAKE=yes
@@ -226,7 +215,6 @@ case "$image" in
     ANACONDA_PYTHON_VERSION=3.8
     GCC_VERSION=11
     PROTOBUF=yes
-    DB=yes
     KATEX=yes
     CONDA_CMAKE=yes
     TRITON=yes
@@ -239,14 +227,12 @@ case "$image" in
     CUDNN_VERSION=8
     CLANG_VERSION=12
     PROTOBUF=yes
-    DB=yes
     TRITON=yes
     ;;
   pytorch-linux-jammy-py3-clang12-asan)
     ANACONDA_PYTHON_VERSION=3.9
     CLANG_VERSION=12
     PROTOBUF=yes
-    DB=yes
     CONDA_CMAKE=yes
     TRITON=yes
     ;;
@@ -259,7 +245,6 @@ case "$image" in
     ANACONDA_PYTHON_VERSION=3.8
     GCC_VERSION=11
     PROTOBUF=yes
-    DB=yes
     KATEX=yes
     CONDA_CMAKE=yes
     TRITON=yes
@@ -289,7 +274,6 @@ case "$image" in
     GCC_VERSION=11
     ACL=yes
     PROTOBUF=yes
-    DB=yes
     CONDA_CMAKE=yes
     # snadampal: skipping sccache due to the following issue
     # https://github.com/pytorch/pytorch/issues/121559
@@ -301,7 +285,6 @@ case "$image" in
   *)
     # Catch-all for builds that are not hardcoded.
     PROTOBUF=yes
-    DB=yes
     echo "image '$image' did not match an existing build configuration"
     if [[ "$image" == *py* ]]; then
       extract_version_from_image_name py ANACONDA_PYTHON_VERSION
