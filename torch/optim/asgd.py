@@ -19,13 +19,6 @@ from .optimizer import (
 __all__ = ["ASGD", "asgd"]
 
 
-def _to_tensor(x, device=None):
-    if not isinstance(x, torch.Tensor):
-        return torch.tensor(x, device=device)
-
-    return x
-
-
 class ASGD(Optimizer):
     def __init__(
         self,
@@ -308,9 +301,9 @@ def _single_tensor_asgd(
             mu.copy_(1 / torch.maximum(step_t - t0, torch.ones_like(step_t)))
         else:
             step = _get_value(step_t)
-            new_eta = _to_tensor(lr / ((1 + lambd * lr * step) ** alpha))
+            new_eta = torch.as_tensor(lr / ((1 + lambd * lr * step) ** alpha))
             eta.copy_(new_eta)
-            new_mu = _to_tensor(1 / max(1, step - t0))
+            new_mu = torch.as_tensor(1 / max(1, step - t0))
             mu.copy_(new_mu)
 
 
@@ -427,17 +420,13 @@ def _multi_tensor_asgd(
             torch._foreach_mul_(new_etas, lr)
             torch._foreach_copy_(grouped_etas, new_etas)
         else:
-            step = grouped_state_steps[0].item()
-            new_etas = []
-            new_mus = []
-
-            for i in range(len(grouped_mus)):
-                new_eta = _to_tensor(
-                    lr / (1 + lambd * lr * step**alpha), device=device
-                )
-                new_etas.append(new_eta)
-                new_mu = _to_tensor(1 / max(1, step - t0), device=device)
-                new_mus.append(new_mu)
-
+            new_etas = [
+                torch.as_tensor(lr / (1 + lambd * lr * step**alpha), device=device)
+                for step in grouped_state_steps
+            ]
+            new_mus = [
+                torch.as_tensor(1 / max(1, step - t0), device=device)
+                for step in grouped_state_steps
+            ]
             torch._foreach_copy_(grouped_etas, new_etas)
             torch._foreach_copy_(grouped_mus, new_mus)
