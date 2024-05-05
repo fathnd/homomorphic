@@ -877,49 +877,6 @@ filegroup(
 )
 
 filegroup(
-    name = "caffe2_quantization_srcs",
-    srcs = [
-        "caffe2/quantization/server/activation_distribution_observer.cc",
-        "caffe2/quantization/server/batch_matmul_dnnlowp_op.cc",
-        "caffe2/quantization/server/caffe2_dnnlowp_utils.cc",
-        "caffe2/quantization/server/channel_shuffle_dnnlowp_op.cc",
-        "caffe2/quantization/server/concat_dnnlowp_op.cc",
-        "caffe2/quantization/server/conv_dnnlowp_acc16_op.cc",
-        "caffe2/quantization/server/conv_dnnlowp_op.cc",
-        "caffe2/quantization/server/conv_relu_op.cc",
-        "caffe2/quantization/server/dequantize_dnnlowp_op.cc",
-        "caffe2/quantization/server/dnnlowp.cc",
-        "caffe2/quantization/server/dnnlowp_partition.cc",
-        "caffe2/quantization/server/dynamic_histogram.cc",
-        "caffe2/quantization/server/elementwise_add_dnnlowp_op.cc",
-        "caffe2/quantization/server/elementwise_linear_dnnlowp_op.cc",
-        "caffe2/quantization/server/elementwise_mul_dnnlowp_op.cc",
-        "caffe2/quantization/server/elementwise_sum_dnnlowp_op.cc",
-        "caffe2/quantization/server/elementwise_sum_relu_op.cc",
-        "caffe2/quantization/server/fbgemm_pack_matrix_cache.cc",
-        "caffe2/quantization/server/fbgemm_pack_op.cc",
-        "caffe2/quantization/server/fully_connected_dnnlowp_acc16_op.cc",
-        "caffe2/quantization/server/fully_connected_dnnlowp_op.cc",
-        "caffe2/quantization/server/fully_connected_fake_lowp_op.cc",
-        "caffe2/quantization/server/group_norm_dnnlowp_op.cc",
-        "caffe2/quantization/server/int8_gen_quant_params.cc",
-        "caffe2/quantization/server/kl_minimization.cc",
-        "caffe2/quantization/server/lstm_unit_dnnlowp_op.cc",
-        "caffe2/quantization/server/norm_minimization.cc",
-        "caffe2/quantization/server/p99.cc",
-        "caffe2/quantization/server/pool_dnnlowp_op.cc",
-        "caffe2/quantization/server/quantize_dnnlowp_op.cc",
-        "caffe2/quantization/server/relu_dnnlowp_op.cc",
-        "caffe2/quantization/server/sigmoid.cc",
-        "caffe2/quantization/server/sigmoid_dnnlowp_op.cc",
-        "caffe2/quantization/server/spatial_batch_norm_dnnlowp_op.cc",
-        "caffe2/quantization/server/tanh.cc",
-        "caffe2/quantization/server/tanh_dnnlowp_op.cc",
-        "caffe2/quantization/server/utility_dnnlowp_ops.cc",
-    ],
-)
-
-filegroup(
     name = "caffe2_queue_srcs",
     srcs = [
         "caffe2/queue/blobs_queue.cc",
@@ -1261,7 +1218,6 @@ cc_library(
             "caffe2/perfkernels/*.h",
             "caffe2/predictor/*.h",
             "caffe2/predictor/emulator/*.h",
-            "caffe2/quantization/server/*.h",
             "caffe2/queue/*.h",
             "caffe2/serialize/*.h",
             "caffe2/sgd/*.h",
@@ -1293,32 +1249,6 @@ cc_library(
 )
 
 cc_library(
-    name = "caffe2_dnnlowp_avx2_ops",
-    srcs = [
-        "caffe2/quantization/server/elementwise_sum_dnnlowp_op_avx2.cc",
-        "caffe2/quantization/server/fully_connected_fake_lowp_op_avx2.cc",
-        "caffe2/quantization/server/group_norm_dnnlowp_op_avx2.cc",
-        "caffe2/quantization/server/norm_minimization_avx2.cc",
-        "caffe2/quantization/server/pool_dnnlowp_op_avx2.cc",
-        "caffe2/quantization/server/relu_dnnlowp_op_avx2.cc",
-        "caffe2/quantization/server/spatial_batch_norm_dnnlowp_op_avx2.cc",
-        "caffe2/quantization/server/transpose.cc",
-    ],
-    copts = CAFFE2_COPTS + [
-        "-mf16c",
-        "-mavx2",
-        "-mfma",
-        "-mxsave",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":caffe2_headers",
-        "@fbgemm",
-    ],
-    alwayslink = True,
-)
-
-cc_library(
     name = "caffe2",
     srcs = [
         "caffe2/share/contrib/depthwise/depthwise3x3_conv_op.cc",
@@ -1329,7 +1259,6 @@ cc_library(
         ":caffe2_opt_srcs",
         ":caffe2_perfkernels_srcs",
         ":caffe2_predictor_srcs",
-        ":caffe2_quantization_srcs",
         ":caffe2_queue_srcs",
         ":caffe2_serialize_srcs",
         ":caffe2_sgd_srcs",
@@ -1341,7 +1270,6 @@ cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":caffe2_core_macros",
-        ":caffe2_dnnlowp_avx2_ops",
         ":caffe2_headers",
         ":caffe2_perfkernels_avx",
         ":caffe2_perfkernels_avx2",
