@@ -3386,6 +3386,7 @@ def forward(self, x):
                     pred = fake_x.size(0) == size
                     gm, guards = torch._dynamo.export(f)(pred, x)
                     actual = normalize_gm(gm.print_readable(print_output=False))
+                    # TODO: This is naughty, EXPECTTEST_ACCEPT=1 doesn't work
                     self.assertExpectedInline(actual, exp_graph[i])
                     dynamo_shape_env_guards = [
                         guard
@@ -3413,7 +3414,7 @@ class GraphModule(torch.nn.Module):
         arg0, arg1, = fx_pytree.tree_flatten_spec(([pred, x], {}), self._in_spec)
         l_x_ = arg1
 
-        sin = l_x_.sin();  l_x_ = None
+        sin: "f32[s1, s2]" = l_x_.sin();  l_x_ = None
         return pytree.tree_unflatten([sin], self._out_spec)
 """
         false_graph = """\
@@ -3424,7 +3425,7 @@ class GraphModule(torch.nn.Module):
         arg0, arg1, = fx_pytree.tree_flatten_spec(([pred, x], {}), self._in_spec)
         l_x_ = arg1
 
-        cos = l_x_.cos();  l_x_ = None
+        cos: "f32[s1, s2]" = l_x_.cos();  l_x_ = None
         return pytree.tree_unflatten([cos], self._out_spec)
 """
         true_guard_code = [
